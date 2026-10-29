@@ -20,7 +20,16 @@ class OverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (bubble == null) showBubble()
+        try {
+            if (bubble == null) showBubble()
+        } catch (e: Throwable) {
+            Toast.makeText(
+                applicationContext,
+                "ОШИБКА: " + e.javaClass.simpleName + " " + e.message,
+                Toast.LENGTH_LONG
+            ).show()
+            stopSelf()
+        }
         return START_NOT_STICKY
     }
 
@@ -35,21 +44,20 @@ class OverlayService : Service() {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 100
-            y = 300
-        }
+        )
+        params.gravity = Gravity.TOP or Gravity.START
+        params.x = 100
+        params.y = 300
 
-        val view = TextView(this).apply {
-            text = "💬"
-            textSize = 24f
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#0A84C6"))
-            }
-        }
+        val view = TextView(this)
+        view.text = "Чат"
+        view.setTextColor(Color.WHITE)
+        view.textSize = 14f
+        view.gravity = Gravity.CENTER
+        val bg = GradientDrawable()
+        bg.shape = GradientDrawable.OVAL
+        bg.setColor(Color.parseColor("#0A84C6"))
+        view.background = bg
 
         var startX = 0
         var startY = 0
@@ -78,7 +86,7 @@ class OverlayService : Service() {
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!moved) {
-                        Toast.makeText(this, "Здесь будет чат", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(applicationContext, "Здесь будет чат", Toast.LENGTH_SHORT).show()
                     }
                     true
                 }
@@ -91,7 +99,10 @@ class OverlayService : Service() {
     }
 
     override fun onDestroy() {
-        bubble?.let { wm?.removeView(it) }
+        try {
+            bubble?.let { wm?.removeView(it) }
+        } catch (e: Throwable) {
+        }
         bubble = null
         super.onDestroy()
     }
