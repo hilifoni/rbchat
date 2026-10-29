@@ -7,58 +7,73 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        val prefs = getSharedPreferences("crash", MODE_PRIVATE)
+        Thread.setDefaultUncaughtExceptionHandler { _, e ->
+            prefs.edit()
+                .putString("log", android.util.Log.getStackTraceString(e))
+                .commit()
+            android.os.Process.killProcess(android.os.Process.myPid())
+            System.exit(1)
+        }
         super.onCreate(savedInstanceState)
 
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 96, 48, 48)
-        }
+        val layout = LinearLayout(this)
+        layout.orientation = LinearLayout.VERTICAL
+        layout.setPadding(32, 96, 32, 32)
 
-        val info = TextView(this).apply {
-            text = "RbChat: проверка оверлея"
-            textSize = 18f
-        }
-
-        val permBtn = Button(this).apply {
-            text = "1. Разрешить поверх других приложений"
-            setOnClickListener {
-                startActivity(
-                    Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                )
-            }
-        }
-
-        val showBtn = Button(this).apply {
-            text = "2. Показать кнопку чата"
-            setOnClickListener {
-                if (Settings.canDrawOverlays(this@MainActivity)) {
-                    startService(Intent(this@MainActivity, OverlayService::class.java))
-                    info.text = "Кнопка запущена. Открой Роблокс."
-                } else {
-                    info.text = "Сначала дай разрешение (кнопка 1)"
-                }
-            }
-        }
-
-        val hideBtn = Button(this).apply {
-            text = "3. Убрать кнопку"
-            setOnClickListener {
-                stopService(Intent(this@MainActivity, OverlayService::class.java))
-                info.text = "Кнопка убрана"
-            }
-        }
-
+        val info = TextView(this)
+        info.text = "RbChat: проверка оверлея"
+        info.textSize = 18f
         layout.addView(info)
+
+        val permBtn = Button(this)
+        permBtn.text = "1. Разрешить поверх других приложений"
+        permBtn.setOnClickListener {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + packageName)
+                )
+            )
+        }
         layout.addView(permBtn)
+
+        val showBtn = Button(this)
+        showBtn.text = "2. Показать кнопку чата"
+        showBtn.setOnClickListener {
+            if (Settings.canDrawOverlays(this)) {
+                startService(Intent(this, OverlayService::class.java))
+                info.text = "Кнопка запущена. Открой Роблокс."
+            } else {
+                info.text = "Сначала дай разрешение (кнопка 1)"
+            }
+        }
         layout.addView(showBtn)
+
+        val hideBtn = Button(this)
+        hideBtn.text = "3. Убрать кнопку"
+        hideBtn.setOnClickListener {
+            stopService(Intent(this, OverlayService::class.java))
+            info.text = "Кнопка убрана"
+        }
         layout.addView(hideBtn)
-        setContentView(layout)
+
+        val old = prefs.getString("log", null)
+        if (old != null) {
+            val logView = TextView(this)
+            logView.text = "ПРОШЛЫЙ ВЫЛЕТ:\n" + old.take(1500)
+            logView.textSize = 11f
+            layout.addView(logView)
+            prefs.edit().remove("log").commit()
+        }
+
+        val scroll = ScrollView(this)
+        scroll.addView(layout)
+        setContentView(scroll)
     }
 }
