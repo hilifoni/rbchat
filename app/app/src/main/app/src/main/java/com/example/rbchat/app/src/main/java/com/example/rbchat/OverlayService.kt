@@ -1,17 +1,27 @@
 package com.example.rbchat
 
+import android.app.AppOpsManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
@@ -20,6 +30,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import kotlin.math.max
 
 class OverlayService : Service() {
@@ -29,6 +40,7 @@ class OverlayService : Service() {
 
     private var btn: TextView? = null
     private var btnP: WindowManager.LayoutParams? = null
+    private var btnAttached = false
 
     private var win: FrameLayout? = null
     private var winP: WindowManager.LayoutParams? = null
@@ -42,8 +54,26 @@ class OverlayService : Service() {
     private var topBar: LinearLayout? = null
     private var handle: View? = null
 
+    private val handler = Handler(Looper.getMainLooper())
+    private var lastQuery = 0L
+    private var fgPkg: String? = null
+    private var usageOk = false
+
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
+    private val ROBLOX = "com.roblox.client"
+
+    private val poll = object : Runnable {
+        override fun run() {
+            try {
+                usageOk = hasUsageAccess()
+                if (usageOk) updateForeground()
+                applyVisibility()
+            } catch (e: Throwable) {
+            }
+            handler.postDelayed(this, 1000)
+        }
+    }
 
     private fun dp(v: Int): Int = (v * density).toInt()
 
@@ -51,13 +81,17 @@ class OverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
+            startAsForeground()
             if (btn == null) {
                 wm = getSystemService(WINDOW_SERVICE) as WindowManager
                 density = resources.displayMetrics.density
                 createButton()
                 createWindow()
+                usageOk = hasUsageAccess()
+                lastQuery = System.currentTimeMillis() - 6L * 60L * 60L * 1000L
                 val saved = getSharedPreferences("layout", MODE_PRIVATE).getBoolean("saved", false)
-                setEdit(!saved)
+                if (!saved) setEdit(true)
+                handler.post(poll)
             }
             if (intent != null && intent.action == "EDIT") {
                 setEdit(true)
@@ -71,6 +105,87 @@ class OverlayService : Service() {
             stopSelf()
         }
         return START_NOT_STICKY
+    }
+
+    private fun startAsForeground() {
+        val chId = "rbchat"
+        if (Build.VERSION.SDK_INT >= 26) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(
+                NotificationChannel(chId, "RbChat", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+        val n = NotificationCompat.Builder(this, chId)
+            .setContentTitle("RbChat работает")
+            .setContentText("Чат появляется поверх Роблокса")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setOngoing(true)
+            .build()
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(1, n)
+        }
+    }
+
+    private fun hasUsageAccess(): Boolean {
+        val ops = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val mode = ops.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            android.os.Process.myUid(),
+            packageName
+        )
+        return mode == AppOpsManager.MODE_ALLOWED
+    }
+
+    private fun updateForeground() {
+        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val now = System.currentTimeMillis()
+        val events = usm.queryEvents(lastQuery, now)
+        val e = UsageEvents.Event()
+        while (events.hasNextEvent()) {
+            events.getNextEvent(e)
+            if (e.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                fgPkg = e.packageName
+            } else if (e.eventType == UsageEvents.Event.MOVE_TO_BACKGROUND &&
+                e.packageName == fgPkg
+            ) {
+                fgPkg = null
+            }
+        }
+        lastQuery = now
+    }
+
+    private fun applyVisibility() {
+        if (editMode) return
+        if (!usageOk) {
+            showButton()
+            return
+        }
+        val pkg = fgPkg
+        if (pkg == ROBLOX) {
+            showButton()
+        } else if (pkg != null && pkg != packageName) {
+            hideButton()
+        }
+    }
+
+    private fun showButton() {
+        val v = btn ?: return
+        val p = btnP ?: return
+        if (!btnAttached) {
+            wm.addView(v, p)
+            btnAttached = true
+        }
+    }
+
+    private fun hideButton() {
+        closeWindow()
+        val v = btn ?: return
+        if (btnAttached) {
+            wm.removeView(v)
+            btnAttached = false
+        }
     }
 
     private fun createButton() {
@@ -107,7 +222,7 @@ class OverlayService : Service() {
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (editMode) {
+                    if (editMode && btnAttached) {
                         p.x = max(0, sx + (e.rawX - tx).toInt())
                         p.y = max(0, sy + (e.rawY - ty).toInt())
                         wm.updateViewLayout(v, p)
@@ -122,7 +237,6 @@ class OverlayService : Service() {
             }
         }
 
-        wm.addView(v, p)
         btn = v
         btnP = p
         styleButton()
@@ -151,6 +265,7 @@ class OverlayService : Service() {
         p.gravity = Gravity.TOP or Gravity.START
         p.x = prefs.getInt("winX", dp(16))
         p.y = prefs.getInt("winY", dp(72))
+        p.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
         winP = p
 
         val root = FrameLayout(this)
@@ -163,7 +278,6 @@ class OverlayService : Service() {
             false
         }
 
-        // содержимое чата
         val content = LinearLayout(this)
         content.orientation = LinearLayout.VERTICAL
 
@@ -182,6 +296,15 @@ class OverlayService : Service() {
         et.setHintTextColor(Color.GRAY)
         et.textSize = 14f
         et.setSingleLine(true)
+        et.imeOptions = EditorInfo.IME_ACTION_SEND or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+        et.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                sendCurrent()
+                true
+            } else {
+                false
+            }
+        }
         et.setOnTouchListener { _, e ->
             if (!editMode && e.action == MotionEvent.ACTION_DOWN) {
                 setFocusable(true)
@@ -196,19 +319,11 @@ class OverlayService : Service() {
         row.addView(et, LinearLayout.LayoutParams(0, WC, 1f))
         val send = Button(this)
         send.text = "Отпр."
-        send.setOnClickListener {
-            val t = et.text.toString().trim()
-            if (t.isNotEmpty()) {
-                addMsg("Я: " + t)
-                et.setText("")
-            }
-            setFocusable(false)
-        }
+        send.setOnClickListener { sendCurrent() }
         row.addView(send, LinearLayout.LayoutParams(WC, WC))
         content.addView(row, LinearLayout.LayoutParams(MP, WC))
         root.addView(content, FrameLayout.LayoutParams(MP, MP))
 
-        // плёнка для перетаскивания окна в режиме настройки
         val sh = View(this)
         sh.setBackgroundColor(Color.parseColor("#33FF9800"))
         sh.visibility = View.GONE
@@ -236,7 +351,6 @@ class OverlayService : Service() {
         }
         root.addView(sh, FrameLayout.LayoutParams(MP, MP))
 
-        // панель кнопок режима настройки
         val bar = LinearLayout(this)
         bar.orientation = LinearLayout.HORIZONTAL
         bar.setBackgroundColor(Color.parseColor("#CC000000"))
@@ -262,7 +376,6 @@ class OverlayService : Service() {
 
         root.addView(bar, FrameLayout.LayoutParams(MP, WC, Gravity.TOP))
 
-        // уголок для изменения размера окна
         val h = View(this)
         h.setBackgroundColor(Color.parseColor("#FF9800"))
         h.visibility = View.GONE
@@ -299,6 +412,16 @@ class OverlayService : Service() {
         handle = h
 
         addMsg("Здесь будет чат. Пока сообщения видны только на этом телефоне.")
+    }
+
+    private fun sendCurrent() {
+        val et = input ?: return
+        val t = et.text.toString().trim()
+        if (t.isNotEmpty()) {
+            addMsg("Я: " + t)
+            et.setText("")
+        }
+        setFocusable(false)
     }
 
     private fun addMsg(text: String) {
@@ -355,7 +478,7 @@ class OverlayService : Service() {
         val s = max(dp(28), p.width + delta)
         p.width = s
         p.height = s
-        wm.updateViewLayout(v, p)
+        if (btnAttached) wm.updateViewLayout(v, p)
     }
 
     private fun setEdit(on: Boolean) {
@@ -365,7 +488,10 @@ class OverlayService : Service() {
         topBar?.visibility = vis
         handle?.visibility = vis
         styleButton()
-        if (on) openWindow()
+        if (on) {
+            showButton()
+            openWindow()
+        }
     }
 
     private fun finishEdit() {
@@ -389,15 +515,17 @@ class OverlayService : Service() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(poll)
         try {
             if (::wm.isInitialized) {
-                btn?.let { wm.removeView(it) }
+                if (btnAttached) btn?.let { wm.removeView(it) }
                 if (winAttached) win?.let { wm.removeView(it) }
             }
         } catch (e: Throwable) {
         }
-        btn = null
+        btnAttached = false
         winAttached = false
+        btn = null
         super.onDestroy()
     }
 }
