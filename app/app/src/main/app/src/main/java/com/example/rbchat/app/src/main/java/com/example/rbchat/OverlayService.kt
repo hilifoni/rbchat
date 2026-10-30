@@ -20,6 +20,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -68,6 +69,8 @@ class OverlayService : Service() {
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
     private val ROBLOX = "com.roblox.client"
+    private val VERSION = "v4"
+    private var lastDiag = ""
 
     private val poll = object : Runnable {
         override fun run() {
@@ -75,6 +78,7 @@ class OverlayService : Service() {
                 usageOk = hasUsageAccess()
                 if (usageOk) updateForeground()
                 applyVisibility()
+                updateDiag()
             } catch (e: Throwable) {
             }
             handler.postDelayed(this, 1000)
@@ -114,24 +118,37 @@ class OverlayService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startAsForeground() {
-        val chId = "rbchat"
-        if (Build.VERSION.SDK_INT >= 26) {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(
-                NotificationChannel(chId, "RbChat", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
-        val n = NotificationCompat.Builder(this, chId)
-            .setContentTitle("RbChat работает")
-            .setContentText("Чат появляется поверх Роблокса")
+    private fun buildNotif(text: String): android.app.Notification {
+        return NotificationCompat.Builder(this, "rbchat")
+            .setContentTitle("RbChat " + VERSION)
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setOngoing(true)
             .build()
+    }
+
+    private fun startAsForeground() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(
+                NotificationChannel("rbchat", "RbChat", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+        val n = buildNotif("Чат появляется поверх Роблокса")
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(1, n)
+        }
+    }
+
+    private fun updateDiag() {
+        val d = "доступ к использованию: " + (if (usageOk) "ДА" else "НЕТ") +
+            ", сейчас на экране: " + (fgPkg ?: "неизвестно")
+        if (d != lastDiag) {
+            lastDiag = d
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(1, buildNotif(d))
         }
     }
 
@@ -294,6 +311,20 @@ class OverlayService : Service() {
             if (e.action == MotionEvent.ACTION_OUTSIDE) setFocusable(false)
             false
         }
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            if (Build.VERSION.SDK_INT >= 30 && typing) {
+                val ime = insets.getInsets(WindowInsets.Type.ime()).bottom
+                if (ime > 0) {
+                    root.post {
+                        if (winAttached && typing) {
+                            p.height = max(dp(60), p.height - ime)
+                            wm.updateViewLayout(root, p)
+                        }
+                    }
+                }
+            }
+            insets
+        }
 
         val content = LinearLayout(this)
         content.orientation = LinearLayout.VERTICAL
@@ -428,7 +459,7 @@ class OverlayService : Service() {
         topBar = bar
         handle = h
 
-        addMsg("Здесь будет чат. Пока сообщения видны только на этом телефоне.")
+        addMsg("RbChat " + VERSION + ". Здесь будет чат, сообщения пока видны только на этом телефоне.")
     }
 
     private fun sendCurrent() {
@@ -460,8 +491,8 @@ class OverlayService : Service() {
             savedY = p.y
             savedH = p.height
             p.y = 0
-            val maxH = (resources.displayMetrics.heightPixels * 0.4f).toInt()
-            p.height = max(dp(110), min(p.height, maxH))
+            val maxH = (resources.displayMetrics.heightPixels * 0.24f).toInt()
+            p.height = max(dp(90), min(p.height, maxH))
             typing = true
         } else if (!on && typing) {
             p.y = savedY
