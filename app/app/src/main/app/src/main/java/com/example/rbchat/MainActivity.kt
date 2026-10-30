@@ -45,7 +45,7 @@ class MainActivity : Activity() {
                 try {
                     if (Settings.canDrawOverlays(this)) {
                         startService(Intent(this, OverlayService::class.java))
-                        info.text = "Кнопка запущена. Открой Роблокс."
+                        info.text = "Запущено. Открой Роблокс."
                     } else {
                         info.text = "Сначала дай разрешение (кнопка 1)"
                     }
@@ -55,12 +55,30 @@ class MainActivity : Activity() {
             }
             layout.addView(showBtn)
 
+            val editBtn = Button(this)
+            editBtn.text = "3. Изменить расположение и размер"
+            editBtn.setOnClickListener {
+                try {
+                    if (Settings.canDrawOverlays(this)) {
+                        val i = Intent(this, OverlayService::class.java)
+                        i.action = "EDIT"
+                        startService(i)
+                        info.text = "Режим настройки включён. Открой Роблокс, расставь, нажми Готово."
+                    } else {
+                        info.text = "Сначала дай разрешение (кнопка 1)"
+                    }
+                } catch (e: Throwable) {
+                    info.text = "ОШИБКА: " + android.util.Log.getStackTraceString(e).take(800)
+                }
+            }
+            layout.addView(editBtn)
+
             val hideBtn = Button(this)
-            hideBtn.text = "3. Убрать кнопку"
+            hideBtn.text = "4. Убрать всё"
             hideBtn.setOnClickListener {
                 try {
                     stopService(Intent(this, OverlayService::class.java))
-                    info.text = "Кнопка убрана"
+                    info.text = "Убрано"
                 } catch (e: Throwable) {
                     info.text = "ОШИБКА: " + android.util.Log.getStackTraceString(e).take(800)
                 }
