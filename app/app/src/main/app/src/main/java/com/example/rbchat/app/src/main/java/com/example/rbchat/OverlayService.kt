@@ -32,6 +32,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlin.math.max
+import kotlin.math.min
 
 class OverlayService : Service() {
 
@@ -54,10 +55,15 @@ class OverlayService : Service() {
     private var topBar: LinearLayout? = null
     private var handle: View? = null
 
+    private var typing = false
+    private var savedY = 0
+    private var savedH = 0
+
     private val handler = Handler(Looper.getMainLooper())
     private var lastQuery = 0L
     private var fgPkg: String? = null
     private var usageOk = false
+    private var lastToastTs = 0L
 
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
@@ -89,6 +95,7 @@ class OverlayService : Service() {
                 createWindow()
                 usageOk = hasUsageAccess()
                 lastQuery = System.currentTimeMillis() - 6L * 60L * 60L * 1000L
+                lastToastTs = System.currentTimeMillis()
                 val saved = getSharedPreferences("layout", MODE_PRIVATE).getBoolean("saved", false)
                 if (!saved) setEdit(true)
                 handler.post(poll)
@@ -141,12 +148,18 @@ class OverlayService : Service() {
     private fun updateForeground() {
         val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val now = System.currentTimeMillis()
-        val events = usm.queryEvents(lastQuery, now)
+        val events = usm.queryEvents(lastQuery - 15000L, now)
         val e = UsageEvents.Event()
+        var newClass: String? = null
+        var newTs = lastToastTs
         while (events.hasNextEvent()) {
             events.getNextEvent(e)
             if (e.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
                 fgPkg = e.packageName
+                if (e.packageName == ROBLOX && e.timeStamp > lastToastTs) {
+                    newClass = e.className
+                    newTs = e.timeStamp
+                }
             } else if (e.eventType == UsageEvents.Event.MOVE_TO_BACKGROUND &&
                 e.packageName == fgPkg
             ) {
@@ -154,6 +167,10 @@ class OverlayService : Service() {
             }
         }
         lastQuery = now
+        if (newClass != null) {
+            lastToastTs = newTs
+            Toast.makeText(applicationContext, "Экран: " + newClass, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun applyVisibility() {
@@ -438,13 +455,29 @@ class OverlayService : Service() {
         val p = winP ?: return
         val w = win ?: return
         if (!winAttached) return
+
+        if (on && !typing && !editMode) {
+            savedY = p.y
+            savedH = p.height
+            p.y = 0
+            val maxH = (resources.displayMetrics.heightPixels * 0.4f).toInt()
+            p.height = max(dp(110), min(p.height, maxH))
+            typing = true
+        } else if (!on && typing) {
+            p.y = savedY
+            p.height = savedH
+            typing = false
+        }
+
         p.flags = if (on) {
             p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
         } else {
             p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         }
         wm.updateViewLayout(w, p)
-        if (!on) {
+        if (on) {
+            scroll?.post { scroll?.fullScroll(View.FOCUS_DOWN) }
+        } else {
             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(w.windowToken, 0)
         }
@@ -482,6 +515,7 @@ class OverlayService : Service() {
     }
 
     private fun setEdit(on: Boolean) {
+        if (on) setFocusable(false)
         editMode = on
         val vis = if (on) View.VISIBLE else View.GONE
         shield?.visibility = vis
