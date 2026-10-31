@@ -4,24 +4,39 @@ import android.app.Activity
 import android.app.AppOpsManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.Gravity
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
+import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : Activity() {
 
     private var info: TextView? = null
     private var status: TextView? = null
+    private var meText: TextView? = null
+    private var meAvatar: ImageView? = null
+    private var resultsBox: LinearLayout? = null
     private var pending: String? = null
     private var askedOverlay = false
     private var askedUsage = false
     private var askedNotif = false
+    private val avatarViews = HashMap<Long, ImageView>()
+    private val bitmaps = HashMap<Long, Bitmap>()
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,15 +50,61 @@ class MainActivity : Activity() {
             title.textSize = 22f
             layout.addView(title)
 
+            // мой профиль
+            val meRow = LinearLayout(this)
+            meRow.orientation = LinearLayout.HORIZONTAL
+            meRow.gravity = Gravity.CENTER_VERTICAL
+            meRow.setPadding(0, dp(8), 0, dp(8))
+            val av = ImageView(this)
+            meRow.addView(av, LinearLayout.LayoutParams(dp(56), dp(56)))
+            val mt = TextView(this)
+            mt.textSize = 14f
+            mt.setPadding(dp(10), 0, 0, 0)
+            meRow.addView(mt, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            layout.addView(meRow)
+            meAvatar = av
+            meText = mt
+
+            // поиск игроков
+            val searchTitle = TextView(this)
+            searchTitle.text = "Поиск игроков Роблокса"
+            searchTitle.textSize = 16f
+            searchTitle.setPadding(0, dp(8), 0, 0)
+            layout.addView(searchTitle)
+
+            val et = EditText(this)
+            et.hint = "Ник игрока"
+            et.setSingleLine(true)
+            et.imeOptions = EditorInfo.IME_ACTION_SEARCH
+            et.setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                    doSearch(et.text.toString())
+                    true
+                } else {
+                    false
+                }
+            }
+            layout.addView(et)
+
+            val findBtn = Button(this)
+            findBtn.text = "Найти"
+            findBtn.setOnClickListener { doSearch(et.text.toString()) }
+            layout.addView(findBtn)
+
+            val box = LinearLayout(this)
+            box.orientation = LinearLayout.VERTICAL
+            layout.addView(box)
+            resultsBox = box
+
             val st = TextView(this)
-            st.textSize = 14f
-            st.setPadding(0, 16, 0, 16)
+            st.textSize = 13f
+            st.setPadding(0, dp(12), 0, dp(8))
             layout.addView(st)
             status = st
 
             val inf = TextView(this)
             inf.textSize = 13f
-            inf.setPadding(0, 0, 0, 16)
+            inf.setPadding(0, 0, 0, dp(8))
             layout.addView(inf)
             info = inf
 
@@ -73,6 +134,7 @@ class MainActivity : Activity() {
             scroll.addView(layout)
             setContentView(scroll)
             updateStatus()
+            loadMe()
         } catch (e: Throwable) {
             val t = TextView(this)
             t.text = "ОШИБКА ПРИ СТАРТЕ:\n" + android.util.Log.getStackTraceString(e).take(1500)
@@ -97,6 +159,116 @@ class MainActivity : Activity() {
         updateStatus()
         proceed()
     }
+
+    // ---------- профиль и поиск ----------
+
+    private fun loadMe() {
+        val p = getSharedPreferences("profile", MODE_PRIVATE)
+        val dn = p.getString("displayName", null)
+        if (dn == null) {
+            meText?.text = "Ник не выбран. Найди себя ниже и нажми на свой ник."
+            meAvatar?.setImageDrawable(null)
+            return
+        }
+        meText?.text = "Мой ник: " + dn + " (@" + p.getString("name", "") + ")\nНик пока не подтверждён"
+        val f = File(filesDir, "avatar.png")
+        if (f.exists()) {
+            meAvatar?.setImageBitmap(BitmapFactory.decodeFile(f.absolutePath))
+        }
+    }
+
+    private fun chooseMe(u: RbUser) {
+        try {
+            val p = getSharedPreferences("profile", MODE_PRIVATE).edit()
+            p.putLong("id", u.id)
+            p.putString("name", u.name)
+            p.putString("displayName", u.displayName)
+            p.apply()
+            val f = File(filesDir, "avatar.png")
+            val bmp = bitmaps[u.id]
+            if (bmp != null) {
+                FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            } else if (f.exists()) {
+                f.delete()
+            }
+            loadMe()
+            info?.text = "Выбран ник " + u.displayName + ". Он появится в окне чата."
+        } catch (e: Throwable) {
+            info?.text = "ОШИБКА: " + android.util.Log.getStackTraceString(e).take(800)
+        }
+    }
+
+    private fun doSearch(q: String) {
+        resultsBox?.removeAllViews()
+        avatarViews.clear()
+        bitmaps.clear()
+        if (q.isBlank()) {
+            info?.text = "Введи ник"
+            return
+        }
+        info?.text = "Ищу..."
+        Thread {
+            try {
+                val users = RobloxApi.search(q)
+                runOnUiThread { showResults(users) }
+                try {
+                    val urls = RobloxApi.avatarUrls(users.map { it.id })
+                    for (u in users) {
+                        val url = urls[u.id]
+                        if (url != null) {
+                            val bmp = try {
+                                RobloxApi.loadBitmap(url)
+                            } catch (e: Exception) {
+                                null
+                            }
+                            if (bmp != null) {
+                                runOnUiThread { setAvatar(u.id, bmp) }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                }
+            } catch (e: Throwable) {
+                runOnUiThread {
+                    info?.text = "Не удалось найти: " + (e.message ?: e.javaClass.simpleName) +
+                        "\nЕсли Роблокс у тебя работает только с VPN, включи его."
+                }
+            }
+        }.start()
+    }
+
+    private fun showResults(users: List<RbUser>) {
+        val box = resultsBox ?: return
+        box.removeAllViews()
+        if (users.isEmpty()) {
+            info?.text = "Никого не нашли"
+            return
+        }
+        info?.text = "Нажми на свой ник, чтобы выбрать его"
+        for (u in users) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.setPadding(dp(4), dp(8), dp(4), dp(8))
+            val iv = ImageView(this)
+            row.addView(iv, LinearLayout.LayoutParams(dp(56), dp(56)))
+            val tv = TextView(this)
+            tv.text = u.displayName + "\n@" + u.name + " · " + u.id
+            tv.textSize = 14f
+            tv.setPadding(dp(10), 0, 0, 0)
+            row.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.setOnClickListener { chooseMe(u) }
+            box.addView(row)
+            avatarViews[u.id] = iv
+        }
+    }
+
+    private fun setAvatar(id: Long, bmp: Bitmap) {
+        bitmaps[id] = bmp
+        avatarViews[id]?.setImageBitmap(bmp)
+    }
+
+    // ---------- разрешения и запуск ----------
 
     private fun hasUsageAccess(): Boolean {
         val ops = getSystemService(APP_OPS_SERVICE) as AppOpsManager
