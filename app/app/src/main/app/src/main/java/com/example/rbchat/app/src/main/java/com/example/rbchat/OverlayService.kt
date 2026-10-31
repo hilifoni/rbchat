@@ -65,13 +65,14 @@ class OverlayService : Service() {
     private var lastQuery = 0L
     private var fgPkg: String? = null
     private var robloxVisible = false
+    private var wasRoblox = false
     private var usageOk = false
     private var lastToastTs = 0L
 
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
     private val ROBLOX = "com.roblox.client"
-    private val VERSION = "v8"
+    private val VERSION = "v9"
     private var lastDiag = ""
     private val grayAvatars = ArrayList<ImageView>()
 
@@ -186,6 +187,8 @@ class OverlayService : Service() {
     }
 
     private fun applyVisibility() {
+        if (wasRoblox && !robloxVisible) clearChat()
+        wasRoblox = robloxVisible
         val ownApp = fgPkg == packageName
         if (editMode) {
             if (!usageOk) return
@@ -223,10 +226,13 @@ class OverlayService : Service() {
         if (btnAttached) {
             wm.removeView(v)
             btnAttached = false
-            chatList?.removeAllViews()
-            grayAvatars.clear()
-            addWelcome()
         }
+    }
+
+    private fun clearChat() {
+        chatList?.removeAllViews()
+        grayAvatars.clear()
+        addWelcome()
     }
 
     private fun createButton() {
@@ -309,7 +315,19 @@ class OverlayService : Service() {
         p.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
         winP = p
 
-        val root = FrameLayout(this)
+        val root = object : FrameLayout(this) {
+            override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+                super.onWindowFocusChanged(hasWindowFocus)
+                if (hasWindowFocus && typing) {
+                    val e = input
+                    if (e != null) {
+                        e.requestFocus()
+                        val imm = this@OverlayService.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                        imm.showSoftInput(e, InputMethodManager.SHOW_IMPLICIT)
+                    }
+                }
+            }
+        }
         val rootBg = GradientDrawable()
         rootBg.setColor(Color.parseColor("#CC101820"))
         rootBg.cornerRadius = dp(10).toFloat()
@@ -372,6 +390,7 @@ class OverlayService : Service() {
                 }
                 et.postDelayed(showKb, 80)
                 et.postDelayed(showKb, 350)
+                et.postDelayed(showKb, 800)
             }
             false
         }
@@ -571,6 +590,12 @@ class OverlayService : Service() {
             p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
         } else {
             p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        }
+        p.softInputMode = if (on) {
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING or
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
+        } else {
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
         }
         wm.updateViewLayout(w, p)
         if (on) {
