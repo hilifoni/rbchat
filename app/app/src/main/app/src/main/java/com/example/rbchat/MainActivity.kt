@@ -144,11 +144,12 @@ class MainActivity : Activity() {
         }
     }
 
-    override fun onResume() {
+        override fun onResume() {
         super.onResume()
+        loadMe()
         updateStatus()
         proceed()
-    }
+        }
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -171,12 +172,43 @@ class MainActivity : Activity() {
             return
         }
         meText?.text = "Мой ник: " + dn + " (@" + p.getString("name", "") + ")\nНик пока не подтверждён"
-        val f = File(filesDir, "avatar.png")
+                val f = File(filesDir, "avatar.png")
         if (f.exists()) {
             meAvatar?.setImageBitmap(BitmapFactory.decodeFile(f.absolutePath))
         } else {
-            meAvatar?.setImageDrawable(null)
+            meAvatar?.setImageDrawable(grayCircle())
+            fetchMyAvatar(p.getLong("id", 0L))
         }
+    }
+
+    private fun grayCircle(): android.graphics.drawable.Drawable {
+        val g = android.graphics.drawable.GradientDrawable()
+        g.shape = android.graphics.drawable.GradientDrawable.OVAL
+        g.setColor(android.graphics.Color.parseColor("#9E9E9E"))
+        return g
+    }
+
+    private var fetching = false
+
+    private fun fetchMyAvatar(id: Long) {
+        if (id == 0L || fetching) return
+        fetching = true
+        Thread {
+            try {
+                val url = RobloxApi.avatarUrls(listOf(id))[id]
+                if (url != null) {
+                    val bmp = RobloxApi.loadBitmap(url)
+                    if (bmp != null) {
+                        FileOutputStream(File(filesDir, "avatar.png")).use {
+                            bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+                        }
+                        runOnUiThread { loadMe() }
+                    }
+                }
+            } catch (e: Throwable) {
+            }
+            fetching = false
+        }.start()
     }
 
     private fun chooseMe(u: RbUser) {
@@ -286,6 +318,7 @@ class MainActivity : Activity() {
             row.setPadding(dp(4), dp(8), dp(4), dp(8))
             val iv = ImageView(this)
             row.addView(iv, LinearLayout.LayoutParams(dp(56), dp(56)))
+                        iv.setImageDrawable(grayCircle())
             val tv = TextView(this)
             tv.text = u.displayName + "\n@" + u.name + " · " + u.id
             tv.textSize = 14f
