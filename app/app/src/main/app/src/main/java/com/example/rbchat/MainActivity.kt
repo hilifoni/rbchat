@@ -144,12 +144,12 @@ class MainActivity : Activity() {
         }
     }
 
-        override fun onResume() {
+    override fun onResume() {
         super.onResume()
         loadMe()
         updateStatus()
         proceed()
-        }
+    }
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -172,7 +172,7 @@ class MainActivity : Activity() {
             return
         }
         meText?.text = "Мой ник: " + dn + " (@" + p.getString("name", "") + ")\nНик пока не подтверждён"
-                val f = File(filesDir, "avatar.png")
+        val f = File(filesDir, "avatar.png")
         if (f.exists()) {
             meAvatar?.setImageBitmap(BitmapFactory.decodeFile(f.absolutePath))
         } else {
@@ -195,15 +195,24 @@ class MainActivity : Activity() {
         fetching = true
         Thread {
             try {
-                val url = RobloxApi.avatarUrls(listOf(id))[id]
-                if (url != null) {
-                    val bmp = RobloxApi.loadBitmap(url)
-                    if (bmp != null) {
-                        FileOutputStream(File(filesDir, "avatar.png")).use {
-                            bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+                var tries = 0
+                while (tries < 3 && !File(filesDir, "avatar.png").exists()) {
+                    try {
+                        val url = RobloxApi.avatarUrls(listOf(id))[id]
+                        if (url != null) {
+                            val bmp = RobloxApi.loadBitmap(url)
+                            if (bmp != null) {
+                                FileOutputStream(File(filesDir, "avatar.png")).use {
+                                    bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+                                }
+                                runOnUiThread { loadMe() }
+                                break
+                            }
                         }
-                        runOnUiThread { loadMe() }
+                    } catch (e: Throwable) {
                     }
+                    tries++
+                    Thread.sleep(2000)
                 }
             } catch (e: Throwable) {
             }
@@ -317,8 +326,8 @@ class MainActivity : Activity() {
             row.gravity = Gravity.CENTER_VERTICAL
             row.setPadding(dp(4), dp(8), dp(4), dp(8))
             val iv = ImageView(this)
+            iv.setImageDrawable(grayCircle())
             row.addView(iv, LinearLayout.LayoutParams(dp(56), dp(56)))
-                        iv.setImageDrawable(grayCircle())
             val tv = TextView(this)
             tv.text = u.displayName + "\n@" + u.name + " · " + u.id
             tv.textSize = 14f
@@ -333,6 +342,15 @@ class MainActivity : Activity() {
     private fun setAvatar(id: Long, bmp: Bitmap) {
         bitmaps[id] = bmp
         avatarViews[id]?.setImageBitmap(bmp)
+        val myId = getSharedPreferences("profile", MODE_PRIVATE).getLong("id", 0L)
+        val mine = File(filesDir, "avatar.png")
+        if (id == myId && !mine.exists()) {
+            try {
+                FileOutputStream(mine).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                loadMe()
+            } catch (e: Throwable) {
+            }
+        }
     }
 
     // ---------- разрешения и запуск ----------
