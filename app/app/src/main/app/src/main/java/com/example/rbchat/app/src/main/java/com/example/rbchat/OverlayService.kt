@@ -71,8 +71,9 @@ class OverlayService : Service() {
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
     private val ROBLOX = "com.roblox.client"
-    private val VERSION = "v7"
+    private val VERSION = "v8"
     private var lastDiag = ""
+    private val grayAvatars = ArrayList<ImageView>()
 
     private val poll = object : Runnable {
         override fun run() {
@@ -81,6 +82,7 @@ class OverlayService : Service() {
                 if (usageOk) updateForeground()
                 applyVisibility()
                 updateDiag()
+                refreshAvatars()
             } catch (e: Throwable) {
             }
             handler.postDelayed(this, 1000)
@@ -221,6 +223,9 @@ class OverlayService : Service() {
         if (btnAttached) {
             wm.removeView(v)
             btnAttached = false
+            chatList?.removeAllViews()
+            grayAvatars.clear()
+            addWelcome()
         }
     }
 
@@ -358,11 +363,15 @@ class OverlayService : Service() {
         et.setOnTouchListener { _, e ->
             if (!editMode && e.action == MotionEvent.ACTION_DOWN) {
                 setFocusable(true)
-                et.post {
-                    et.requestFocus()
-                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                    imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT)
+                val showKb = Runnable {
+                    if (typing) {
+                        et.requestFocus()
+                        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                        imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT)
+                    }
                 }
+                et.postDelayed(showKb, 80)
+                et.postDelayed(showKb, 350)
             }
             false
         }
@@ -461,7 +470,20 @@ class OverlayService : Service() {
         topBar = bar
         handle = h
 
+        addWelcome()
+    }
+
+    private fun addWelcome() {
         addMsg("RbChat " + VERSION + ". Здесь будет чат, сообщения пока видны только на этом телефоне.")
+    }
+
+    private fun refreshAvatars() {
+        if (grayAvatars.isEmpty()) return
+        val f = java.io.File(filesDir, "avatar.png")
+        if (!f.exists()) return
+        val bmp = android.graphics.BitmapFactory.decodeFile(f.absolutePath) ?: return
+        for (v in grayAvatars) v.setImageBitmap(bmp)
+        grayAvatars.clear()
     }
 
     private fun sendCurrent() {
@@ -493,7 +515,7 @@ class OverlayService : Service() {
         row.orientation = LinearLayout.HORIZONTAL
         row.setPadding(0, dp(3), 0, dp(3))
 
-                val iv = ImageView(this)
+        val iv = ImageView(this)
         val f = java.io.File(filesDir, "avatar.png")
         var bmp: android.graphics.Bitmap? = null
         if (f.exists()) bmp = android.graphics.BitmapFactory.decodeFile(f.absolutePath)
@@ -504,8 +526,10 @@ class OverlayService : Service() {
             g.shape = GradientDrawable.OVAL
             g.setColor(Color.parseColor("#9E9E9E"))
             iv.setImageDrawable(g)
+            grayAvatars.add(iv)
         }
         row.addView(iv, LinearLayout.LayoutParams(dp(28), dp(28)))
+
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(6), 0, 0, 0)
