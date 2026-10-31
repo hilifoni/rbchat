@@ -64,13 +64,14 @@ class OverlayService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastQuery = 0L
     private var fgPkg: String? = null
+    private var robloxVisible = false
     private var usageOk = false
     private var lastToastTs = 0L
 
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
     private val ROBLOX = "com.roblox.client"
-    private val VERSION = "v5"
+    private val VERSION = "v6"
     private var lastDiag = ""
 
     private val poll = object : Runnable {
@@ -145,7 +146,8 @@ class OverlayService : Service() {
 
     private fun updateDiag() {
         val d = "доступ к использованию: " + (if (usageOk) "ДА" else "НЕТ") +
-            ", сейчас на экране: " + (fgPkg ?: "неизвестно")
+            ", Роблокс на экране: " + (if (robloxVisible) "ДА" else "НЕТ") +
+            ", последнее приложение: " + (fgPkg ?: "неизвестно")
         if (d != lastDiag) {
             lastDiag = d
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -172,23 +174,23 @@ class OverlayService : Service() {
             events.getNextEvent(e)
             if (e.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
                 fgPkg = e.packageName
-            } else if (e.eventType == UsageEvents.Event.MOVE_TO_BACKGROUND &&
-                e.packageName == fgPkg
-            ) {
-                fgPkg = null
+                if (e.packageName == ROBLOX) robloxVisible = true
+            } else if (e.eventType == UsageEvents.Event.MOVE_TO_BACKGROUND) {
+                if (e.packageName == ROBLOX) robloxVisible = false
+                if (e.packageName == fgPkg) fgPkg = null
             }
         }
         lastQuery = now
     }
 
     private fun applyVisibility() {
+        val ownApp = fgPkg == packageName
         if (editMode) {
             if (!usageOk) return
-            val p0 = fgPkg
-            if (p0 == ROBLOX) {
+            if (robloxVisible) {
                 showButton()
                 openWindow()
-            } else if (p0 != null && p0 != packageName) {
+            } else if (!ownApp) {
                 hideButton()
             }
             return
@@ -197,10 +199,9 @@ class OverlayService : Service() {
             showButton()
             return
         }
-        val pkg = fgPkg
-        if (pkg == ROBLOX) {
+        if (robloxVisible) {
             showButton()
-        } else if (pkg != null && pkg != packageName) {
+        } else if (!ownApp) {
             hideButton()
         }
     }
