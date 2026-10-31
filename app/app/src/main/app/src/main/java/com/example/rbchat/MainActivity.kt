@@ -174,6 +174,8 @@ class MainActivity : Activity() {
         val f = File(filesDir, "avatar.png")
         if (f.exists()) {
             meAvatar?.setImageBitmap(BitmapFactory.decodeFile(f.absolutePath))
+        } else {
+            meAvatar?.setImageDrawable(null)
         }
     }
 
@@ -185,14 +187,43 @@ class MainActivity : Activity() {
             p.putString("displayName", u.displayName)
             p.apply()
             val f = File(filesDir, "avatar.png")
-            val bmp = bitmaps[u.id]
-            if (bmp != null) {
-                FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            } else if (f.exists()) {
-                f.delete()
-            }
+            if (f.exists()) f.delete()
             loadMe()
-            info?.text = "Выбран ник " + u.displayName + ". Он появится в окне чата."
+            info?.text = "Выбран ник " + u.displayName + ". Загружаю аватарку..."
+            val cached: Bitmap? = bitmaps[u.id]
+            Thread {
+                try {
+                    var bmp: Bitmap? = cached
+                    if (bmp == null) {
+                        var url: String? = null
+                        var tries = 0
+                        while (url == null && tries < 4) {
+                            url = RobloxApi.avatarUrls(listOf(u.id))[u.id]
+                            if (url == null) {
+                                tries++
+                                Thread.sleep(1000)
+                            }
+                        }
+                        if (url != null) bmp = RobloxApi.loadBitmap(url)
+                    }
+                    val finalBmp: Bitmap? = bmp
+                    if (finalBmp != null) {
+                        FileOutputStream(f).use { finalBmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                        runOnUiThread {
+                            loadMe()
+                            info?.text = "Готово: ник и аватарка сохранены"
+                        }
+                    } else {
+                        runOnUiThread {
+                            info?.text = "Роблокс пока не отдал аватарку. Нажми на свой ник ещё раз."
+                        }
+                    }
+                } catch (e: Throwable) {
+                    runOnUiThread {
+                        info?.text = "Аватарка не загрузилась: " + (e.message ?: e.javaClass.simpleName)
+                    }
+                }
+            }.start()
         } catch (e: Throwable) {
             info?.text = "ОШИБКА: " + android.util.Log.getStackTraceString(e).take(800)
         }
@@ -227,6 +258,9 @@ class MainActivity : Activity() {
                         }
                     }
                 } catch (e: Exception) {
+                    runOnUiThread {
+                        info?.text = "Аватарки не загрузились: " + (e.message ?: e.javaClass.simpleName)
+                    }
                 }
             } catch (e: Throwable) {
                 runOnUiThread {
