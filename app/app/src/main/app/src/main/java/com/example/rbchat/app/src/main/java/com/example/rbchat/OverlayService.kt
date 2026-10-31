@@ -191,7 +191,17 @@ class OverlayService : Service() {
     }
 
     private fun applyVisibility() {
-        if (editMode) return
+                if (editMode) {
+            if (!usageOk) return
+            val p0 = fgPkg
+            if (p0 == ROBLOX) {
+                showButton()
+                openWindow()
+            } else if (p0 != null && p0 != packageName) {
+                hideButton()
+            }
+            return
+                }
         if (!usageOk) {
             showButton()
             return
