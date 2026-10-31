@@ -27,6 +27,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -69,7 +70,7 @@ class OverlayService : Service() {
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
     private val ROBLOX = "com.roblox.client"
-    private val VERSION = "v4"
+    private val VERSION = "v5"
     private var lastDiag = ""
 
     private val poll = object : Runnable {
@@ -167,16 +168,10 @@ class OverlayService : Service() {
         val now = System.currentTimeMillis()
         val events = usm.queryEvents(lastQuery - 15000L, now)
         val e = UsageEvents.Event()
-        var newClass: String? = null
-        var newTs = lastToastTs
         while (events.hasNextEvent()) {
             events.getNextEvent(e)
             if (e.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
                 fgPkg = e.packageName
-                if (e.packageName == ROBLOX && e.timeStamp > lastToastTs) {
-                    newClass = e.className
-                    newTs = e.timeStamp
-                }
             } else if (e.eventType == UsageEvents.Event.MOVE_TO_BACKGROUND &&
                 e.packageName == fgPkg
             ) {
@@ -184,14 +179,10 @@ class OverlayService : Service() {
             }
         }
         lastQuery = now
-        if (newClass != null) {
-            lastToastTs = newTs
-            Toast.makeText(applicationContext, "Экран: " + newClass, Toast.LENGTH_SHORT).show()
-        }
     }
 
     private fun applyVisibility() {
-                if (editMode) {
+        if (editMode) {
             if (!usageOk) return
             val p0 = fgPkg
             if (p0 == ROBLOX) {
@@ -201,7 +192,7 @@ class OverlayService : Service() {
                 hideButton()
             }
             return
-                }
+        }
         if (!usageOk) {
             showButton()
             return
@@ -476,7 +467,7 @@ class OverlayService : Service() {
         val et = input ?: return
         val t = et.text.toString().trim()
         if (t.isNotEmpty()) {
-            addMsg("Я: " + t)
+            addChat(t)
             et.setText("")
         }
         setFocusable(false)
@@ -489,6 +480,42 @@ class OverlayService : Service() {
         tv.setTextColor(Color.WHITE)
         tv.textSize = 13f
         list.addView(tv)
+        scroll?.post { scroll?.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun addChat(text: String) {
+        val list = chatList ?: return
+        val prefs = getSharedPreferences("profile", MODE_PRIVATE)
+        val name = prefs.getString("displayName", null) ?: "Я"
+
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.setPadding(0, dp(3), 0, dp(3))
+
+        val iv = ImageView(this)
+        val f = java.io.File(filesDir, "avatar.png")
+        if (f.exists()) {
+            val bmp = android.graphics.BitmapFactory.decodeFile(f.absolutePath)
+            if (bmp != null) iv.setImageBitmap(bmp)
+        }
+        row.addView(iv, LinearLayout.LayoutParams(dp(28), dp(28)))
+
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(6), 0, 0, 0)
+        val n = TextView(this)
+        n.text = name
+        n.setTextColor(Color.parseColor("#7CC4FF"))
+        n.textSize = 11f
+        val m = TextView(this)
+        m.text = text
+        m.setTextColor(Color.WHITE)
+        m.textSize = 13f
+        col.addView(n)
+        col.addView(m)
+        row.addView(col, LinearLayout.LayoutParams(0, WC, 1f))
+
+        list.addView(row)
         scroll?.post { scroll?.fullScroll(View.FOCUS_DOWN) }
     }
 
