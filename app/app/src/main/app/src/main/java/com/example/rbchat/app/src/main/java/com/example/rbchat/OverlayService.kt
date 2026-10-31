@@ -71,7 +71,7 @@ class OverlayService : Service() {
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
     private val ROBLOX = "com.roblox.client"
-    private val VERSION = "v6"
+    private val VERSION = "v7"
     private var lastDiag = ""
 
     private val poll = object : Runnable {
@@ -493,14 +493,19 @@ class OverlayService : Service() {
         row.orientation = LinearLayout.HORIZONTAL
         row.setPadding(0, dp(3), 0, dp(3))
 
-        val iv = ImageView(this)
+                val iv = ImageView(this)
         val f = java.io.File(filesDir, "avatar.png")
-        if (f.exists()) {
-            val bmp = android.graphics.BitmapFactory.decodeFile(f.absolutePath)
-            if (bmp != null) iv.setImageBitmap(bmp)
+        var bmp: android.graphics.Bitmap? = null
+        if (f.exists()) bmp = android.graphics.BitmapFactory.decodeFile(f.absolutePath)
+        if (bmp != null) {
+            iv.setImageBitmap(bmp)
+        } else {
+            val g = GradientDrawable()
+            g.shape = GradientDrawable.OVAL
+            g.setColor(Color.parseColor("#9E9E9E"))
+            iv.setImageDrawable(g)
         }
         row.addView(iv, LinearLayout.LayoutParams(dp(28), dp(28)))
-
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(6), 0, 0, 0)
