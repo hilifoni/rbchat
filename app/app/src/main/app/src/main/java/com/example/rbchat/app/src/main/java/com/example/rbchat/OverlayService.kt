@@ -80,9 +80,9 @@ class OverlayService : Service() {
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
     private val ROBLOX = "com.roblox.client"
-    private val VERSION = "v10"
+    private val VERSION = "v11"
     private var lastDiag = ""
-    private class Msg(val rid: Long, val name: String, val text: String)
+    private class Msg(val id: String, val rid: Long, val name: String, val text: String)
 
     private var msgs: List<Msg> = emptyList()
     private var reg: ListenerRegistration? = null
@@ -91,6 +91,8 @@ class OverlayService : Service() {
     private var ownGray = false
     private var lastSend = 0L
     private var errShown = false
+    private val hiddenIds = HashSet<String>()
+    private var seeded = false
 
     private val poll = object : Runnable {
         override fun run() {
@@ -204,6 +206,11 @@ class OverlayService : Service() {
     }
 
     private fun applyVisibility() {
+        if (robloxVisible && !wasRoblox) {
+            for (m in msgs) hiddenIds.add(m.id)
+            render()
+        }
+        wasRoblox = robloxVisible
         val ownApp = fgPkg == packageName
         if (editMode) {
             if (!usageOk) return
@@ -522,7 +529,7 @@ class OverlayService : Service() {
         ownGray = false
         addWelcome()
         for (m in msgs) {
-            addChatView(m)
+            if (!hiddenIds.contains(m.id)) addChatView(m)
         }
     }
 
@@ -668,9 +675,13 @@ class OverlayService : Service() {
                 }
                 val list = ArrayList<Msg>()
                 for (d in snap.documents) {
-                    list.add(Msg(d.getLong("rid") ?: 0L, d.getString("name") ?: "?", d.getString("text") ?: ""))
+                    list.add(Msg(d.id, d.getLong("rid") ?: 0L, d.getString("name") ?: "?", d.getString("text") ?: ""))
                 }
                 list.reverse()
+                if (!seeded) {
+                    seeded = true
+                    for (m in list) hiddenIds.add(m.id)
+                }
                 msgs = list
                 render()
             }
