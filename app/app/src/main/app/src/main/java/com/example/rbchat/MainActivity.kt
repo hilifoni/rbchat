@@ -135,6 +135,7 @@ class MainActivity : Activity() {
             setContentView(scroll)
             updateStatus()
             loadMe()
+                        checkFirebase()
         } catch (e: Throwable) {
             val t = TextView(this)
             t.text = "ОШИБКА ПРИ СТАРТЕ:\n" + android.util.Log.getStackTraceString(e).take(1500)
@@ -352,7 +353,47 @@ class MainActivity : Activity() {
             }
         }
     }
+    private var fbDone = false
 
+    private fun checkFirebase() {
+        info?.text = "Firebase: проверяю..."
+        fbDone = false
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (!fbDone) {
+                info?.text = "Firebase: нет ответа за 15 секунд. Если нужен VPN, включи его и открой приложение заново."
+            }
+        }, 15000)
+        try {
+            val auth = com.google.firebase.auth.FirebaseAuth.getInstance()
+            val writePing = {
+                val uid = auth.currentUser?.uid ?: "none"
+                val data = hashMapOf<String, Any>("t" to System.currentTimeMillis())
+                com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    .collection("ping").document(uid).set(data)
+                    .addOnSuccessListener {
+                        fbDone = true
+                        info?.text = "Firebase: вход и запись работают ✅"
+                    }
+                    .addOnFailureListener {
+                        fbDone = true
+                        info?.text = "Firebase: вход есть, запись не удалась: " + (it.message ?: it.javaClass.simpleName)
+                    }
+            }
+            if (auth.currentUser != null) {
+                writePing()
+            } else {
+                auth.signInAnonymously()
+                    .addOnSuccessListener { writePing() }
+                    .addOnFailureListener {
+                        fbDone = true
+                        info?.text = "Firebase: вход не удался: " + (it.message ?: it.javaClass.simpleName)
+                    }
+            }
+        } catch (e: Throwable) {
+            fbDone = true
+            info?.text = "Firebase: ошибка: " + (e.message ?: e.javaClass.simpleName)
+        }
+    }
     // ---------- разрешения и запуск ----------
 
     private fun hasUsageAccess(): Boolean {
