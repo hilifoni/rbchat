@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "725958597119",
+    "project_id": "rbchat-45c4c",
+    "storage_bucket": "rbchat-45c4c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:725958597119:android:6943ab19204035755a6fca",
+        "android_client_info": {
+          "package_name": "com.example.rbchat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBtSlxAI-9OyiNyfdwLSq_jllWR1VH0Ty0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
