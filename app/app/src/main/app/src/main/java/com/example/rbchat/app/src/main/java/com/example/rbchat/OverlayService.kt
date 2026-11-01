@@ -9,6 +9,8 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -16,6 +18,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Base64
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -33,6 +36,11 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import kotlin.math.max
 import kotlin.math.min
 
@@ -72,9 +80,17 @@ class OverlayService : Service() {
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
     private val ROBLOX = "com.roblox.client"
-    private val VERSION = "v9"
+    private val VERSION = "v10"
     private var lastDiag = ""
-    private val grayAvatars = ArrayList<ImageView>()
+    private class Msg(val rid: Long, val name: String, val text: String)
+
+    private var msgs: List<Msg> = emptyList()
+    private var reg: ListenerRegistration? = null
+    private val avatarCache = HashMap<Long, Bitmap>()
+    private val avatarAsked = HashSet<Long>()
+    private var ownGray = false
+    private var lastSend = 0L
+    private var errShown = false
 
     private val poll = object : Runnable {
         override fun run() {
@@ -102,6 +118,7 @@ class OverlayService : Service() {
                 density = resources.displayMetrics.density
                 createButton()
                 createWindow()
+                startFirebase()
                 usageOk = hasUsageAccess()
                 lastQuery = System.currentTimeMillis() - 6L * 60L * 60L * 1000L
                 lastToastTs = System.currentTimeMillis()
@@ -187,8 +204,6 @@ class OverlayService : Service() {
     }
 
     private fun applyVisibility() {
-        if (wasRoblox && !robloxVisible) clearChat()
-        wasRoblox = robloxVisible
         val ownApp = fgPkg == packageName
         if (editMode) {
             if (!usageOk) return
@@ -227,12 +242,6 @@ class OverlayService : Service() {
             wm.removeView(v)
             btnAttached = false
         }
-    }
-
-    private fun clearChat() {
-        chatList?.removeAllViews()
-        grayAvatars.clear()
-        addWelcome()
     }
 
     private fun createButton() {
@@ -493,26 +502,28 @@ class OverlayService : Service() {
     }
 
     private fun addWelcome() {
-        addMsg("RbChat " + VERSION + ". Здесь будет чат, сообщения пока видны только на этом телефоне.")
+        addMsg("RbChat " + VERSION + ". Общий чат: сообщения видят все, у кого установлен RbChat.")
     }
 
     private fun refreshAvatars() {
-        if (grayAvatars.isEmpty()) return
-        val f = java.io.File(filesDir, "avatar.png")
-        if (!f.exists()) return
-        val bmp = android.graphics.BitmapFactory.decodeFile(f.absolutePath) ?: return
-        for (v in grayAvatars) v.setImageBitmap(bmp)
-        grayAvatars.clear()
+        if (ownGray && java.io.File(filesDir, "avatar.png").exists()) {
+            ownGray = false
+            render()
+        }
     }
 
-    private fun sendCurrent() {
-        val et = input ?: return
-        val t = et.text.toString().trim()
-        if (t.isNotEmpty()) {
-            addChat(t)
-            et.setText("")
+    private fun toast(text: String) {
+        Toast.makeText(applicationContext, text, Toast.LENGTH_LONG).show()
+    }
+
+    private fun render() {
+        val list = chatList ?: return
+        list.removeAllViews()
+        ownGray = false
+        addWelcome()
+        for (m in msgs) {
+            addChatView(m)
         }
-        setFocusable(false)
     }
 
     private fun addMsg(text: String) {
@@ -525,19 +536,24 @@ class OverlayService : Service() {
         scroll?.post { scroll?.fullScroll(View.FOCUS_DOWN) }
     }
 
-    private fun addChat(text: String) {
+    private fun addChatView(m: Msg) {
         val list = chatList ?: return
-        val prefs = getSharedPreferences("profile", MODE_PRIVATE)
-        val name = prefs.getString("displayName", null) ?: "Я"
+        val myId = getSharedPreferences("profile", MODE_PRIVATE).getLong("id", 0L)
 
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.setPadding(0, dp(3), 0, dp(3))
 
         val iv = ImageView(this)
-        val f = java.io.File(filesDir, "avatar.png")
-        var bmp: android.graphics.Bitmap? = null
-        if (f.exists()) bmp = android.graphics.BitmapFactory.decodeFile(f.absolutePath)
+        var bmp: Bitmap? = null
+        if (m.rid != 0L && m.rid == myId) {
+            val f = java.io.File(filesDir, "avatar.png")
+            if (f.exists()) bmp = BitmapFactory.decodeFile(f.absolutePath)
+            if (bmp == null) ownGray = true
+        } else {
+            bmp = avatarCache[m.rid]
+            if (bmp == null) askAvatar(m.rid)
+        }
         if (bmp != null) {
             iv.setImageBitmap(bmp)
         } else {
@@ -545,7 +561,6 @@ class OverlayService : Service() {
             g.shape = GradientDrawable.OVAL
             g.setColor(Color.parseColor("#9E9E9E"))
             iv.setImageDrawable(g)
-            grayAvatars.add(iv)
         }
         row.addView(iv, LinearLayout.LayoutParams(dp(28), dp(28)))
 
@@ -553,19 +568,147 @@ class OverlayService : Service() {
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(6), 0, 0, 0)
         val n = TextView(this)
-        n.text = name
+        n.text = m.name
         n.setTextColor(Color.parseColor("#7CC4FF"))
         n.textSize = 11f
-        val m = TextView(this)
-        m.text = text
-        m.setTextColor(Color.WHITE)
-        m.textSize = 13f
+        val t = TextView(this)
+        t.text = m.text
+        t.setTextColor(Color.WHITE)
+        t.textSize = 13f
         col.addView(n)
-        col.addView(m)
+        col.addView(t)
         row.addView(col, LinearLayout.LayoutParams(0, WC, 1f))
 
         list.addView(row)
         scroll?.post { scroll?.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun askAvatar(rid: Long) {
+        if (rid == 0L || !avatarAsked.add(rid)) return
+        FirebaseFirestore.getInstance().collection("users").document(rid.toString()).get()
+            .addOnSuccessListener { d ->
+                val s = d.getString("avatar")
+                if (s == null) {
+                    avatarAsked.remove(rid)
+                } else {
+                    try {
+                        val bytes = Base64.decode(s, Base64.DEFAULT)
+                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        if (bmp != null) {
+                            avatarCache[rid] = bmp
+                            render()
+                        }
+                    } catch (e: Throwable) {
+                    }
+                }
+            }
+            .addOnFailureListener {
+                avatarAsked.remove(rid)
+            }
+    }
+
+    private fun uploadAvatarThen(rid: Long, name: String, next: () -> Unit) {
+        val f = java.io.File(filesDir, "avatar.png")
+        val prefs = getSharedPreferences("profile", MODE_PRIVATE)
+        val stamp = f.lastModified()
+        if (!f.exists() || prefs.getLong("avatarSent", 0L) == stamp) {
+            next()
+            return
+        }
+        try {
+            val src = BitmapFactory.decodeFile(f.absolutePath)
+            if (src == null) {
+                next()
+                return
+            }
+            val small = Bitmap.createScaledBitmap(src, 64, 64, true)
+            val out = java.io.ByteArrayOutputStream()
+            small.compress(Bitmap.CompressFormat.PNG, 100, out)
+            val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+            val data = hashMapOf<String, Any>("name" to name, "avatar" to b64)
+            FirebaseFirestore.getInstance().collection("users").document(rid.toString()).set(data)
+                .addOnCompleteListener { t ->
+                    if (t.isSuccessful) prefs.edit().putLong("avatarSent", stamp).apply()
+                    next()
+                }
+        } catch (e: Throwable) {
+            next()
+        }
+    }
+
+    private fun startFirebase() {
+        try {
+            val auth = FirebaseAuth.getInstance()
+            if (auth.currentUser != null) {
+                listen()
+            } else {
+                auth.signInAnonymously()
+                    .addOnSuccessListener { listen() }
+                    .addOnFailureListener {
+                        toast("Чат: вход не удался. " + (it.message ?: it.javaClass.simpleName))
+                    }
+            }
+        } catch (e: Throwable) {
+            toast("Чат: ошибка Firebase. " + (e.message ?: e.javaClass.simpleName))
+        }
+    }
+
+    private fun listen() {
+        if (reg != null) return
+        reg = FirebaseFirestore.getInstance().collection("messages")
+            .orderBy("ts", Query.Direction.DESCENDING)
+            .limit(50)
+            .addSnapshotListener { snap, err ->
+                if (err != null || snap == null) {
+                    if (err != null && !errShown) {
+                        errShown = true
+                        toast("Чат: " + (err.message ?: err.javaClass.simpleName))
+                    }
+                    return@addSnapshotListener
+                }
+                val list = ArrayList<Msg>()
+                for (d in snap.documents) {
+                    list.add(Msg(d.getLong("rid") ?: 0L, d.getString("name") ?: "?", d.getString("text") ?: ""))
+                }
+                list.reverse()
+                msgs = list
+                render()
+            }
+    }
+
+    private fun sendCurrent() {
+        val et = input ?: return
+        val t = et.text.toString().trim()
+        if (t.isNotEmpty()) {
+            val prefs = getSharedPreferences("profile", MODE_PRIVATE)
+            val rid = prefs.getLong("id", 0L)
+            val name: String = prefs.getString("displayName", null) ?: ""
+            val uid: String = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+            val now = System.currentTimeMillis()
+            if (rid == 0L || name.isEmpty()) {
+                toast("Сначала выбери ник в приложении RbChat")
+            } else if (uid.isEmpty()) {
+                toast("Чат пока не подключился. Подожди немного или включи VPN")
+            } else if (now - lastSend >= 1000L) {
+                lastSend = now
+                val text = t.take(200)
+                et.setText("")
+                uploadAvatarThen(rid, name) {
+                    val data = hashMapOf<String, Any>(
+                        "uid" to uid,
+                        "rid" to rid,
+                        "name" to name.take(40),
+                        "text" to text,
+                        "ts" to FieldValue.serverTimestamp()
+                    )
+                    FirebaseFirestore.getInstance().collection("messages").add(data)
+                        .addOnFailureListener {
+                            toast("Не отправилось: " + (it.message ?: it.javaClass.simpleName))
+                        }
+                }
+            }
+        }
+        setFocusable(false)
     }
 
     private fun setFocusable(on: Boolean) {
@@ -673,6 +816,8 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(poll)
+        reg?.remove()
+        reg = null
         try {
             if (::wm.isInitialized) {
                 if (btnAttached) btn?.let { wm.removeView(it) }
