@@ -80,14 +80,15 @@ class OverlayService : Service() {
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
     private val ROBLOX = "com.roblox.client"
-    private val VERSION = "v11"
+    private val VERSION = "v12"
     private var lastDiag = ""
-    private class Msg(val id: String, val rid: Long, val name: String, val text: String)
+    private class Msg(val id: String, val rid: Long, val uid: String, val name: String, val text: String)
 
     private var msgs: List<Msg> = emptyList()
     private var reg: ListenerRegistration? = null
     private val avatarCache = HashMap<Long, Bitmap>()
     private val avatarAsked = HashSet<Long>()
+    private val verifiedUid = HashMap<Long, String>()
     private var ownGray = false
     private var lastSend = 0L
     private var errShown = false
@@ -574,9 +575,19 @@ class OverlayService : Service() {
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(6), 0, 0, 0)
+        val pp = getSharedPreferences("profile", MODE_PRIVATE)
+        val curUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+        var ok = false
+        if (m.uid.isNotEmpty()) {
+            if (m.rid == myId) {
+                ok = pp.getBoolean("verified", false) && pp.getLong("verifiedId", 0L) == myId && m.uid == curUid
+            } else {
+                ok = verifiedUid[m.rid] == m.uid
+            }
+        }
         val n = TextView(this)
-        n.text = m.name
-        n.setTextColor(Color.parseColor("#7CC4FF"))
+        n.text = if (ok) m.name + " ✓" else m.name
+        n.setTextColor(Color.parseColor(if (ok) "#7CFFA8" else "#7CC4FF"))
         n.textSize = 11f
         val t = TextView(this)
         t.text = m.text
@@ -594,48 +605,69 @@ class OverlayService : Service() {
         if (rid == 0L || !avatarAsked.add(rid)) return
         FirebaseFirestore.getInstance().collection("users").document(rid.toString()).get()
             .addOnSuccessListener { d ->
+                var changed = false
+                val vu = d.getString("uid")
+                if (d.getBoolean("verified") == true && vu != null) {
+                    verifiedUid[rid] = vu
+                    changed = true
+                }
                 val s = d.getString("avatar")
-                if (s == null) {
-                    avatarAsked.remove(rid)
-                } else {
+                if (s != null && s.isNotEmpty()) {
                     try {
                         val bytes = Base64.decode(s, Base64.DEFAULT)
                         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                         if (bmp != null) {
                             avatarCache[rid] = bmp
-                            render()
+                            changed = true
                         }
                     } catch (e: Throwable) {
                     }
                 }
+                if (changed) render()
             }
             .addOnFailureListener {
                 avatarAsked.remove(rid)
             }
     }
 
-    private fun uploadAvatarThen(rid: Long, name: String, next: () -> Unit) {
+    private fun syncUserThen(rid: Long, name: String, uid: String, next: () -> Unit) {
         val f = java.io.File(filesDir, "avatar.png")
         val prefs = getSharedPreferences("profile", MODE_PRIVATE)
         val stamp = f.lastModified()
-        if (!f.exists() || prefs.getLong("avatarSent", 0L) == stamp) {
+        val verNow = prefs.getBoolean("verified", false) && prefs.getLong("verifiedId", 0L) == rid
+        val avatarChanged = f.exists() && prefs.getLong("avatarSent", 0L) != stamp
+        val verChanged = prefs.getBoolean("verSynced", false) != verNow
+        val uidChanged = prefs.getString("uidSynced", "") != uid
+        if (!avatarChanged && !verChanged && !uidChanged) {
             next()
             return
         }
         try {
-            val src = BitmapFactory.decodeFile(f.absolutePath)
-            if (src == null) {
-                next()
-                return
+            var b64 = ""
+            if (f.exists()) {
+                val src = BitmapFactory.decodeFile(f.absolutePath)
+                if (src != null) {
+                    val small = Bitmap.createScaledBitmap(src, 64, 64, true)
+                    val out = java.io.ByteArrayOutputStream()
+                    small.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+                }
             }
-            val small = Bitmap.createScaledBitmap(src, 64, 64, true)
-            val out = java.io.ByteArrayOutputStream()
-            small.compress(Bitmap.CompressFormat.PNG, 100, out)
-            val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
-            val data = hashMapOf<String, Any>("name" to name, "avatar" to b64)
+            val data = hashMapOf<String, Any>(
+                "name" to name,
+                "avatar" to b64,
+                "uid" to uid,
+                "verified" to verNow
+            )
             FirebaseFirestore.getInstance().collection("users").document(rid.toString()).set(data)
                 .addOnCompleteListener { t ->
-                    if (t.isSuccessful) prefs.edit().putLong("avatarSent", stamp).apply()
+                    if (t.isSuccessful) {
+                        prefs.edit()
+                            .putLong("avatarSent", stamp)
+                            .putBoolean("verSynced", verNow)
+                            .putString("uidSynced", uid)
+                            .apply()
+                    }
                     next()
                 }
         } catch (e: Throwable) {
@@ -675,7 +707,7 @@ class OverlayService : Service() {
                 }
                 val list = ArrayList<Msg>()
                 for (d in snap.documents) {
-                    list.add(Msg(d.id, d.getLong("rid") ?: 0L, d.getString("name") ?: "?", d.getString("text") ?: ""))
+                    list.add(Msg(d.id, d.getLong("rid") ?: 0L, d.getString("uid") ?: "", d.getString("name") ?: "?", d.getString("text") ?: ""))
                 }
                 list.reverse()
                 if (!seeded) {
@@ -704,7 +736,7 @@ class OverlayService : Service() {
                 lastSend = now
                 val text = t.take(200)
                 et.setText("")
-                uploadAvatarThen(rid, name) {
+                syncUserThen(rid, name, uid) {
                     val data = hashMapOf<String, Any>(
                         "uid" to uid,
                         "rid" to rid,
