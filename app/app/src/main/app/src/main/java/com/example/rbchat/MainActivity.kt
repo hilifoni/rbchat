@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
@@ -29,6 +30,8 @@ class MainActivity : Activity() {
     private var meText: TextView? = null
     private var meAvatar: ImageView? = null
     private var resultsBox: LinearLayout? = null
+    private var verBtn: Button? = null
+    private var checkBtn: Button? = null
     private var pending: String? = null
     private var askedOverlay = false
     private var askedUsage = false
@@ -64,6 +67,18 @@ class MainActivity : Activity() {
             layout.addView(meRow)
             meAvatar = av
             meText = mt
+
+            val verB = Button(this)
+            verB.text = "Подтвердить ник"
+            verB.setOnClickListener { startVerify() }
+            layout.addView(verB)
+            verBtn = verB
+
+            val checkB = Button(this)
+            checkB.text = "Проверить код в профиле"
+            checkB.setOnClickListener { checkVerify() }
+            layout.addView(checkB)
+            checkBtn = checkB
 
             // поиск игроков
             val searchTitle = TextView(this)
@@ -135,7 +150,7 @@ class MainActivity : Activity() {
             setContentView(scroll)
             updateStatus()
             loadMe()
-                        checkFirebase()
+            checkFirebase()
         } catch (e: Throwable) {
             val t = TextView(this)
             t.text = "ОШИБКА ПРИ СТАРТЕ:\n" + android.util.Log.getStackTraceString(e).take(1500)
@@ -170,9 +185,16 @@ class MainActivity : Activity() {
         if (dn == null) {
             meText?.text = "Ник не выбран. Найди себя ниже и нажми на свой ник."
             meAvatar?.setImageDrawable(null)
+            verBtn?.visibility = View.GONE
+            checkBtn?.visibility = View.GONE
             return
         }
-        meText?.text = "Мой ник: " + dn + " (@" + p.getString("name", "") + ")\nНик пока не подтверждён"
+        val verified = p.getBoolean("verified", false) &&
+            p.getLong("verifiedId", 0L) == p.getLong("id", 0L)
+        meText?.text = "Мой ник: " + dn + " (@" + p.getString("name", "") + ")\n" +
+            (if (verified) "Ник подтверждён ✓" else "Ник пока не подтверждён")
+        verBtn?.visibility = if (verified) View.GONE else View.VISIBLE
+        checkBtn?.visibility = if (verified) View.GONE else View.VISIBLE
         val f = File(filesDir, "avatar.png")
         if (f.exists()) {
             meAvatar?.setImageBitmap(BitmapFactory.decodeFile(f.absolutePath))
@@ -221,9 +243,67 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    private fun codeFor(id: Long): String {
+        val h = java.lang.Math.floorMod(id * 2654435761L, 2176782336L)
+        return "RB-" + java.lang.Long.toString(h, 36).uppercase().padStart(6, '0')
+    }
+
+    private fun startVerify() {
+        val id = getSharedPreferences("profile", MODE_PRIVATE).getLong("id", 0L)
+        if (id == 0L) {
+            info?.text = "Сначала выбери ник"
+            return
+        }
+        val code = codeFor(id)
+        try {
+            val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("code", code))
+        } catch (e: Throwable) {
+        }
+        info?.text = "Твой код: " + code + " (он скопирован).\n" +
+            "Открой Роблокс, зайди в свой профиль, нажми «Редактировать» и вставь код в поле «Обо мне». " +
+            "Сохрани, вернись сюда и нажми «Проверить код в профиле»."
+    }
+
+    private fun checkVerify() {
+        val p = getSharedPreferences("profile", MODE_PRIVATE)
+        val id = p.getLong("id", 0L)
+        if (id == 0L) {
+            info?.text = "Сначала выбери ник"
+            return
+        }
+        info?.text = "Проверяю профиль..."
+        val code = codeFor(id)
+        Thread {
+            try {
+                val d = RobloxApi.description(id)
+                if (d.contains(code, ignoreCase = true)) {
+                    p.edit().putBoolean("verified", true).putLong("verifiedId", id).apply()
+                    runOnUiThread {
+                        loadMe()
+                        info?.text = "Ник подтверждён ✓. Код из профиля лучше не удалять: он понадобится после переустановки."
+                    }
+                } else {
+                    runOnUiThread {
+                        info?.text = "Код " + code + " в описании профиля не найден. Проверь, что описание сохранено, и попробуй ещё раз через несколько секунд."
+                    }
+                }
+            } catch (e: Throwable) {
+                runOnUiThread {
+                    info?.text = "Не получилось проверить: " + (e.message ?: e.javaClass.simpleName)
+                }
+            }
+        }.start()
+    }
+
     private fun chooseMe(u: RbUser) {
         try {
+            val oldId = getSharedPreferences("profile", MODE_PRIVATE).getLong("id", 0L)
             val p = getSharedPreferences("profile", MODE_PRIVATE).edit()
+            if (oldId != u.id) {
+                p.putBoolean("verified", false)
+                p.putLong("verifiedId", 0L)
+            }
             p.putLong("id", u.id)
             p.putString("name", u.name)
             p.putString("displayName", u.displayName)
@@ -353,6 +433,7 @@ class MainActivity : Activity() {
             }
         }
     }
+
     private var fbDone = false
 
     private fun checkFirebase() {
@@ -394,6 +475,7 @@ class MainActivity : Activity() {
             info?.text = "Firebase: ошибка: " + (e.message ?: e.javaClass.simpleName)
         }
     }
+
     // ---------- разрешения и запуск ----------
 
     private fun hasUsageAccess(): Boolean {
