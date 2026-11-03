@@ -96,6 +96,11 @@ object RobloxApi {
         return map
     }
 
+    fun description(id: Long): String {
+        val json = JSONObject(request("https://users.roblox.com/v1/users/" + id, "GET", null))
+        return json.optString("description", "")
+    }
+
     fun loadBitmap(url: String): Bitmap? {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 10000
