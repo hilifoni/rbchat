@@ -3,6 +3,7 @@ package com.example.rbchat
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -33,6 +34,24 @@ object GroupsUi {
 
     private fun curGid(a: Activity): String =
         a.getSharedPreferences("room", Context.MODE_PRIVATE).getString("gid", "") ?: ""
+
+    fun register(a: Activity, gid: String) {
+        val me = uid()
+        val p = a.getSharedPreferences("profile", Context.MODE_PRIVATE)
+        val rid = p.getLong("id", 0L)
+        if (me.isEmpty() || rid == 0L) return
+        val data = hashMapOf<String, Any>(
+            "name" to (p.getString("displayName", "") ?: ""),
+            "uname" to (p.getString("name", "") ?: ""),
+            "rid" to rid
+        )
+        FirebaseFirestore.getInstance().collection("groups").document(gid)
+            .collection("members").document(me).set(data)
+    }
+
+    private fun openChat(a: Activity) {
+        a.startActivity(Intent(a, GroupActivity::class.java))
+    }
 
     fun section(a: Activity): LinearLayout {
         val box = LinearLayout(a)
@@ -88,6 +107,13 @@ object GroupsUi {
         pub.setOnClickListener { publicList(a) { refresh() } }
         box.addView(pub)
 
+        val open = Button(a)
+        open.text = "Открыть чат группы"
+        open.setOnClickListener {
+            if (curGid(a).isEmpty()) toast(a, "Сначала выбери группу") else openChat(a)
+        }
+        box.addView(open)
+
         val manage = Button(a)
         manage.text = "Управление группой"
         manage.setOnClickListener { manage(a) }
@@ -141,8 +167,10 @@ object GroupsUi {
                     FirebaseFirestore.getInstance().collection("groups").document(gid).set(data)
                         .addOnSuccessListener {
                             setRoom(a, gid, n)
+                            register(a, gid)
                             done()
                             toast(a, "Группа создана. Код: " + gid)
+                            openChat(a)
                         }
                         .addOnFailureListener {
                             toast(a, "Не получилось: " + (it.message ?: it.javaClass.simpleName))
@@ -172,8 +200,9 @@ object GroupsUi {
                     toast(a, "Тебя забанили в этой группе")
                 } else {
                     setRoom(a, c, d.getString("name") ?: c)
+                    register(a, c)
                     done()
-                    toast(a, "Ты в группе")
+                    openChat(a)
                 }
             }
             .addOnFailureListener {
@@ -207,7 +236,7 @@ object GroupsUi {
             }
     }
 
-    private fun manage(a: Activity) {
+    fun manage(a: Activity) {
         val gid = curGid(a)
         if (gid.isEmpty()) {
             toast(a, "В общем чате управлять нечем. Выбери группу")
@@ -302,14 +331,17 @@ object GroupsUi {
 
         label("Забанены (нажми, чтобы разбанить)")
         val banned = d.get("banned") as? Map<*, *> ?: emptyMap<String, Any>()
+        val bNames = GroupCmd.info(d.get("banned"), "name")
+        val bReasons = GroupCmd.info(d.get("banned"), "reason")
         if (banned.isEmpty()) {
             val e = TextView(a)
             e.text = "Никого"
             l.addView(e)
         }
-        for ((k, v) in banned) {
+        for ((k, _) in banned) {
             val b = Button(a)
-            b.text = "Разбанить: " + v.toString()
+            val r = bReasons[k.toString()] ?: ""
+            b.text = "Разбанить: " + (bNames[k.toString()] ?: "?") + (if (r.isNotEmpty()) " (" + r + ")" else "")
             b.setOnClickListener { again(ref.update("banned." + k.toString(), FieldValue.delete())) }
             l.addView(b)
         }
@@ -321,10 +353,13 @@ object GroupsUi {
             e.text = "Никого"
             l.addView(e)
         }
-        for ((k, v) in muted) {
-            val nm = ((v as? Map<*, *>)?.get("name") ?: "?").toString()
+        val mNames = GroupCmd.info(d.get("muted"), "name")
+        val mReasons = GroupCmd.info(d.get("muted"), "reason")
+        val mUntil = GroupCmd.untils(d.get("muted"))
+        for ((k, _) in muted) {
             val b = Button(a)
-            b.text = "Снять мут: " + nm
+            val r = mReasons[k.toString()] ?: ""
+            b.text = "Снять мут: " + (mNames[k.toString()] ?: "?") + " (до " + GroupCmd.untilText(mUntil[k.toString()] ?: 0L) + ")" + (if (r.isNotEmpty()) " " + r else "")
             b.setOnClickListener { again(ref.update("muted." + k.toString(), FieldValue.delete())) }
             l.addView(b)
         }
