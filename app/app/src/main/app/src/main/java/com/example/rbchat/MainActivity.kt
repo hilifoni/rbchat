@@ -80,6 +80,8 @@ class MainActivity : Activity() {
             layout.addView(checkB)
             checkBtn = checkB
 
+            layout.addView(GroupsUi.section(this))
+
             // поиск игроков
             val searchTitle = TextView(this)
             searchTitle.text = "Поиск игроков Роблокса"
@@ -150,7 +152,7 @@ class MainActivity : Activity() {
             setContentView(scroll)
             updateStatus()
             loadMe()
-            checkFirebase()
+                        checkFirebase()
         } catch (e: Throwable) {
             val t = TextView(this)
             t.text = "ОШИБКА ПРИ СТАРТЕ:\n" + android.util.Log.getStackTraceString(e).take(1500)
@@ -433,7 +435,6 @@ class MainActivity : Activity() {
             }
         }
     }
-
     private var fbDone = false
 
     private fun checkFirebase() {
@@ -475,7 +476,6 @@ class MainActivity : Activity() {
             info?.text = "Firebase: ошибка: " + (e.message ?: e.javaClass.simpleName)
         }
     }
-
     // ---------- разрешения и запуск ----------
 
     private fun hasUsageAccess(): Boolean {
