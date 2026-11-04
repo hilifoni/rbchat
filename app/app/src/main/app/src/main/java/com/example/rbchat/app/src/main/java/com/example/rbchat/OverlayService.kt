@@ -101,6 +101,8 @@ class OverlayService : Service() {
     private var grpBanned: Set<String> = emptySet()
     private var grpMuted: Map<String, Long> = emptyMap()
     private var grpWords: List<String> = emptyList()
+    private var grpBannedReason: Map<String, String> = emptyMap()
+    private var grpMutedReason: Map<String, String> = emptyMap()
 
     private val poll = object : Runnable {
         override fun run() {
@@ -664,19 +666,22 @@ class OverlayService : Service() {
             acts.addView(actionButton("Мут 10м") {
                 val v = hashMapOf<String, Any>(
                     "until" to (System.currentTimeMillis() + 10L * 60000L),
-                    "name" to m.name
+                    "name" to m.name,
+                    "reason" to ""
                 )
                 groupUpdate("muted." + m.uid, v, "Замучен на 10 минут")
             })
             acts.addView(actionButton("Мут 1ч") {
                 val v = hashMapOf<String, Any>(
                     "until" to (System.currentTimeMillis() + 60L * 60000L),
-                    "name" to m.name
+                    "name" to m.name,
+                    "reason" to ""
                 )
                 groupUpdate("muted." + m.uid, v, "Замучен на 1 час")
             })
             acts.addView(actionButton("Бан") {
-                groupUpdate("banned." + m.uid, m.name, "Забанен")
+                val v = hashMapOf<String, Any>("name" to m.name, "reason" to "")
+                groupUpdate("banned." + m.uid, v, "Забанен")
             })
             if (curUid == grpOwner) {
                 acts.addView(actionButton("В модеры") {
@@ -811,6 +816,8 @@ class OverlayService : Service() {
                 grpOwner = d.getString("owner") ?: ""
                 grpMods = (d.get("mods") as? Map<*, *>)?.keys?.map { it.toString() }?.toSet() ?: emptySet()
                 grpBanned = (d.get("banned") as? Map<*, *>)?.keys?.map { it.toString() }?.toSet() ?: emptySet()
+                grpBannedReason = GroupCmd.info(d.get("banned"), "reason")
+                grpMutedReason = GroupCmd.info(d.get("muted"), "reason")
                 val mm = HashMap<String, Long>()
                 val raw = d.get("muted") as? Map<*, *>
                 if (raw != null) {
@@ -861,6 +868,12 @@ class OverlayService : Service() {
     private fun sendCurrent() {
         val et = input ?: return
         val t = et.text.toString().trim()
+        if (t.startsWith("/")) {
+            et.setText("")
+            if (gid.isEmpty()) toast("Команды работают только в группах") else GroupCmd.run(gid, t) { toast(it) }
+            setFocusable(false)
+            return
+        }
         if (t.isNotEmpty()) {
             val prefs = getSharedPreferences("profile", MODE_PRIVATE)
             val rid = prefs.getLong("id", 0L)
@@ -872,9 +885,11 @@ class OverlayService : Service() {
             } else if (uid.isEmpty()) {
                 toast("Чат пока не подключился. Подожди немного или включи VPN")
             } else if (gid.isNotEmpty() && grpBanned.contains(uid)) {
-                toast("Тебя забанили в этой группе")
+                val r = grpBannedReason[uid] ?: ""
+                toast("Тебя забанили в этой группе" + (if (r.isNotEmpty()) ". Причина: " + r else ""))
             } else if (gid.isNotEmpty() && (grpMuted[uid] ?: 0L) > now) {
-                toast("Ты в муте, писать пока нельзя")
+                val r = grpMutedReason[uid] ?: ""
+                toast("Ты в муте до " + GroupCmd.untilText(grpMuted[uid] ?: 0L) + (if (r.isNotEmpty()) ". Причина: " + r else ""))
             } else if (gid.isNotEmpty() && hasBad(t)) {
                 toast("В сообщении есть запрещённое слово")
             } else if (now - lastSend >= 1000L) {
