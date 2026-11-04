@@ -80,7 +80,7 @@ class OverlayService : Service() {
     private val MP = ViewGroup.LayoutParams.MATCH_PARENT
     private val WC = ViewGroup.LayoutParams.WRAP_CONTENT
     private val ROBLOX = "com.roblox.client"
-    private val VERSION = "v12"
+    private val VERSION = "v13"
     private var lastDiag = ""
     private class Msg(val id: String, val rid: Long, val uid: String, val name: String, val text: String)
 
@@ -94,6 +94,13 @@ class OverlayService : Service() {
     private var errShown = false
     private val hiddenIds = HashSet<String>()
     private var seeded = false
+    private var gid = ""
+    private var grpReg: ListenerRegistration? = null
+    private var grpOwner = ""
+    private var grpMods: Set<String> = emptySet()
+    private var grpBanned: Set<String> = emptySet()
+    private var grpMuted: Map<String, Long> = emptyMap()
+    private var grpWords: List<String> = emptyList()
 
     private val poll = object : Runnable {
         override fun run() {
@@ -103,6 +110,7 @@ class OverlayService : Service() {
                 applyVisibility()
                 updateDiag()
                 refreshAvatars()
+                checkRoom()
             } catch (e: Throwable) {
             }
             handler.postDelayed(this, 1000)
@@ -510,7 +518,61 @@ class OverlayService : Service() {
     }
 
     private fun addWelcome() {
-        addMsg("RbChat " + VERSION + ". Общий чат: сообщения видят все, у кого установлен RbChat.")
+        val rp = getSharedPreferences("room", MODE_PRIVATE)
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
+        var t = "RbChat " + VERSION + ". "
+        if (gid.isEmpty()) {
+            t += "Общий чат: сообщения видят все, у кого установлен RbChat."
+        } else {
+            t += "Группа: " + (rp.getString("gname", "") ?: "") + " (код " + gid + ")"
+            if (uid.isNotEmpty() && grpBanned.contains(uid)) t += "\nТебя забанили в этой группе."
+        }
+        addMsg(t)
+    }
+
+    private fun checkRoom() {
+        if (FirebaseAuth.getInstance().currentUser == null) return
+        val g = getSharedPreferences("room", MODE_PRIVATE).getString("gid", "") ?: ""
+        if (g != gid) listen()
+    }
+
+    private fun censor(t: String): String {
+        var r = t
+        for (w in grpWords) {
+            if (w.isNotEmpty()) r = r.replace(w, "*".repeat(w.length), ignoreCase = true)
+        }
+        return r
+    }
+
+    private fun hasBad(t: String): Boolean {
+        val l = t.lowercase()
+        for (w in grpWords) {
+            if (w.isNotEmpty() && l.contains(w)) return true
+        }
+        return false
+    }
+
+    private fun canModerate(): Boolean {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return false
+        return gid.isNotEmpty() && (uid == grpOwner || grpMods.contains(uid))
+    }
+
+    private fun groupUpdate(field: String, value: Any, okText: String) {
+        FirebaseFirestore.getInstance().collection("groups").document(gid)
+            .update(field, value)
+            .addOnSuccessListener { toast(okText) }
+            .addOnFailureListener { toast("Не получилось: " + (it.message ?: it.javaClass.simpleName)) }
+    }
+
+    private fun actionButton(text: String, onClick: () -> Unit): Button {
+        val b = Button(this)
+        b.text = text
+        b.textSize = 10f
+        b.setPadding(dp(4), 0, dp(4), 0)
+        b.minHeight = 0
+        b.minimumHeight = 0
+        b.setOnClickListener { onClick() }
+        return b
     }
 
     private fun refreshAvatars() {
@@ -590,11 +652,42 @@ class OverlayService : Service() {
         n.setTextColor(Color.parseColor(if (ok) "#7CFFA8" else "#7CC4FF"))
         n.textSize = 11f
         val t = TextView(this)
-        t.text = m.text
+        t.text = if (gid.isEmpty()) m.text else censor(m.text)
         t.setTextColor(Color.WHITE)
         t.textSize = 13f
         col.addView(n)
         col.addView(t)
+        if (canModerate() && m.uid.isNotEmpty() && m.uid != curUid && m.uid != grpOwner) {
+            val acts = LinearLayout(this)
+            acts.orientation = LinearLayout.HORIZONTAL
+            acts.visibility = View.GONE
+            acts.addView(actionButton("Мут 10м") {
+                val v = hashMapOf<String, Any>(
+                    "until" to (System.currentTimeMillis() + 10L * 60000L),
+                    "name" to m.name
+                )
+                groupUpdate("muted." + m.uid, v, "Замучен на 10 минут")
+            })
+            acts.addView(actionButton("Мут 1ч") {
+                val v = hashMapOf<String, Any>(
+                    "until" to (System.currentTimeMillis() + 60L * 60000L),
+                    "name" to m.name
+                )
+                groupUpdate("muted." + m.uid, v, "Замучен на 1 час")
+            })
+            acts.addView(actionButton("Бан") {
+                groupUpdate("banned." + m.uid, m.name, "Забанен")
+            })
+            if (curUid == grpOwner) {
+                acts.addView(actionButton("В модеры") {
+                    groupUpdate("mods." + m.uid, m.name, "Теперь модератор")
+                })
+            }
+            col.addView(acts)
+            t.setOnClickListener {
+                acts.visibility = if (acts.visibility == View.GONE) View.VISIBLE else View.GONE
+            }
+        }
         row.addView(col, LinearLayout.LayoutParams(0, WC, 1f))
 
         list.addView(row)
@@ -693,15 +786,61 @@ class OverlayService : Service() {
     }
 
     private fun listen() {
-        if (reg != null) return
-        reg = FirebaseFirestore.getInstance().collection("messages")
+        reg?.remove()
+        reg = null
+        grpReg?.remove()
+        grpReg = null
+        grpOwner = ""
+        grpMods = emptySet()
+        grpBanned = emptySet()
+        grpMuted = emptyMap()
+        grpWords = emptyList()
+        msgs = emptyList()
+        errShown = false
+        gid = getSharedPreferences("room", MODE_PRIVATE).getString("gid", "") ?: ""
+        val db = FirebaseFirestore.getInstance()
+        val col = if (gid.isEmpty()) {
+            db.collection("messages")
+        } else {
+            db.collection("groups").document(gid).collection("msgs")
+        }
+        render()
+        if (gid.isNotEmpty()) {
+            grpReg = db.collection("groups").document(gid).addSnapshotListener { d, e ->
+                if (e != null || d == null) return@addSnapshotListener
+                grpOwner = d.getString("owner") ?: ""
+                grpMods = (d.get("mods") as? Map<*, *>)?.keys?.map { it.toString() }?.toSet() ?: emptySet()
+                grpBanned = (d.get("banned") as? Map<*, *>)?.keys?.map { it.toString() }?.toSet() ?: emptySet()
+                val mm = HashMap<String, Long>()
+                val raw = d.get("muted") as? Map<*, *>
+                if (raw != null) {
+                    for ((k, v) in raw) {
+                        val until = ((v as? Map<*, *>)?.get("until") as? Number)?.toLong() ?: 0L
+                        mm[k.toString()] = until
+                    }
+                }
+                grpMuted = mm
+                val ws = ArrayList<String>()
+                val wl = d.get("words") as? List<*>
+                if (wl != null) {
+                    for (w in wl) ws.add(w.toString().lowercase())
+                }
+                grpWords = ws
+                render()
+            }
+        }
+        reg = col
             .orderBy("ts", Query.Direction.DESCENDING)
             .limit(50)
             .addSnapshotListener { snap, err ->
                 if (err != null || snap == null) {
                     if (err != null && !errShown) {
                         errShown = true
-                        toast("Чат: " + (err.message ?: err.javaClass.simpleName))
+                        if (gid.isNotEmpty()) {
+                            toast("Нет доступа к группе (возможно, тебя забанили)")
+                        } else {
+                            toast("Чат: " + (err.message ?: err.javaClass.simpleName))
+                        }
                     }
                     return@addSnapshotListener
                 }
@@ -732,6 +871,12 @@ class OverlayService : Service() {
                 toast("Сначала выбери ник в приложении RbChat")
             } else if (uid.isEmpty()) {
                 toast("Чат пока не подключился. Подожди немного или включи VPN")
+            } else if (gid.isNotEmpty() && grpBanned.contains(uid)) {
+                toast("Тебя забанили в этой группе")
+            } else if (gid.isNotEmpty() && (grpMuted[uid] ?: 0L) > now) {
+                toast("Ты в муте, писать пока нельзя")
+            } else if (gid.isNotEmpty() && hasBad(t)) {
+                toast("В сообщении есть запрещённое слово")
             } else if (now - lastSend >= 1000L) {
                 lastSend = now
                 val text = t.take(200)
@@ -744,7 +889,13 @@ class OverlayService : Service() {
                         "text" to text,
                         "ts" to FieldValue.serverTimestamp()
                     )
-                    FirebaseFirestore.getInstance().collection("messages").add(data)
+                    val db = FirebaseFirestore.getInstance()
+                    val col = if (gid.isEmpty()) {
+                        db.collection("messages")
+                    } else {
+                        db.collection("groups").document(gid).collection("msgs")
+                    }
+                    col.add(data)
                         .addOnFailureListener {
                             toast("Не отправилось: " + (it.message ?: it.javaClass.simpleName))
                         }
@@ -861,6 +1012,8 @@ class OverlayService : Service() {
         handler.removeCallbacks(poll)
         reg?.remove()
         reg = null
+        grpReg?.remove()
+        grpReg = null
         try {
             if (::wm.isInitialized) {
                 if (btnAttached) btn?.let { wm.removeView(it) }
