@@ -246,10 +246,10 @@ object GroupsUi {
             .addOnSuccessListener { d ->
                 val me = uid()
                 val owner = d.getString("owner") ?: ""
-                val mods = d.get("mods") as? Map<*, *> ?: emptyMap<String, Any>()
+                val perms = GroupCmd.permsFrom(d.get("mods"), owner, me)
                 if (!d.exists()) {
                     toast(a, "Группа не найдена")
-                } else if (me != owner && !mods.containsKey(me)) {
+                } else if (perms.isEmpty()) {
                     toast(a, "У тебя нет прав в этой группе")
                 } else {
                     showManage(a, gid, d, me == owner)
@@ -267,6 +267,7 @@ object GroupsUi {
         isOwner: Boolean
     ) {
         val ref = FirebaseFirestore.getInstance().collection("groups").document(gid)
+        val myPerms = GroupCmd.permsFrom(d.get("mods"), d.getString("owner") ?: "", uid())
         val l = LinearLayout(a)
         l.orientation = LinearLayout.VERTICAL
         l.setPadding(dp(a, 20), dp(a, 8), dp(a, 20), dp(a, 8))
@@ -300,6 +301,7 @@ object GroupsUi {
         code.setTextIsSelectable(true)
         l.addView(code)
 
+        if (myPerms.contains("words")) {
         label("Чёрный список слов (нажми на слово, чтобы убрать)")
         val words = d.get("words") as? List<*> ?: emptyList<Any>()
         if (words.isEmpty()) {
@@ -328,7 +330,9 @@ object GroupsUi {
             }
         }
         l.addView(add)
+        }
 
+        if (myPerms.contains("ban")) {
         label("Забанены (нажми, чтобы разбанить)")
         val banned = d.get("banned") as? Map<*, *> ?: emptyMap<String, Any>()
         val bNames = GroupCmd.info(d.get("banned"), "name")
@@ -346,6 +350,9 @@ object GroupsUi {
             l.addView(b)
         }
 
+        }
+
+        if (myPerms.contains("mute")) {
         label("В муте (нажми, чтобы снять)")
         val muted = d.get("muted") as? Map<*, *> ?: emptyMap<String, Any>()
         if (muted.isEmpty()) {
@@ -364,12 +371,14 @@ object GroupsUi {
             l.addView(b)
         }
 
+        }
+
         if (isOwner) {
             label("Модераторы (нажми, чтобы убрать)")
             val mods = d.get("mods") as? Map<*, *> ?: emptyMap<String, Any>()
             if (mods.isEmpty()) {
                 val e = TextView(a)
-                e.text = "Никого. Модератора можно назначить в чате: нажми на сообщение игрока и «В модеры»"
+                e.text = "Никого. Админов назначай в чате группы: нажми на название группы, потом на участника"
                 l.addView(e)
             }
             for ((k, v) in mods) {
