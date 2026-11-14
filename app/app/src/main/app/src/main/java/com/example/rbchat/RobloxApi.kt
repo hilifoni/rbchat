@@ -10,6 +10,8 @@ import java.net.URLEncoder
 
 data class RbUser(val id: Long, val name: String, val displayName: String)
 
+data class RbGame(val id: Long, val name: String)
+
 object RobloxApi {
 
     private fun request(url: String, method: String, body: String?): String {
@@ -86,6 +88,42 @@ object RobloxApi {
         if (ids.isEmpty()) return map
         val url = "https://thumbnails.roblox.com/v1/users/avatar-headshot" +
             "?size=150x150&format=Png&isCircular=true&userIds=" + ids.joinToString(",")
+        val json = JSONObject(request(url, "GET", null))
+        val arr = json.getJSONArray("data")
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val u = o.optString("imageUrl", "")
+            if (u.isNotEmpty()) map[o.getLong("targetId")] = u
+        }
+        return map
+    }
+
+    fun searchGames(query: String): List<RbGame> {
+        val url = "https://apis.roblox.com/search-api/omni-search?searchQuery=" +
+            URLEncoder.encode(query.trim(), "UTF-8") +
+            "&pageType=all&sessionId=" + java.util.UUID.randomUUID().toString()
+        val json = JSONObject(request(url, "GET", null))
+        val res = ArrayList<RbGame>()
+        val groups = json.optJSONArray("searchResults") ?: return res
+        for (i in 0 until groups.length()) {
+            val contents = groups.getJSONObject(i).optJSONArray("contents") ?: continue
+            for (j in 0 until contents.length()) {
+                val c = contents.getJSONObject(j)
+                if (c.optString("contentType", "Game") != "Game") continue
+                var id = c.optLong("contentId", 0L)
+                if (id == 0L) id = c.optLong("universeId", 0L)
+                val name = c.optString("name", "")
+                if (id != 0L && name.isNotEmpty() && res.size < 10) res.add(RbGame(id, name))
+            }
+        }
+        return res
+    }
+
+    fun gameIcons(ids: List<Long>): Map<Long, String> {
+        val map = HashMap<Long, String>()
+        if (ids.isEmpty()) return map
+        val url = "https://thumbnails.roblox.com/v1/games/icons?returnPolicy=PlaceHolder" +
+            "&size=150x150&format=Png&isCircular=false&universeIds=" + ids.joinToString(",")
         val json = JSONObject(request(url, "GET", null))
         val arr = json.getJSONArray("data")
         for (i in 0 until arr.length()) {
