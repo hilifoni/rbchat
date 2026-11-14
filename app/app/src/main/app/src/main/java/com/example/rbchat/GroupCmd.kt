@@ -30,6 +30,34 @@ object GroupCmd {
         return r
     }
 
+    val ALL: Set<String> = setOf("mute", "ban", "pin", "words", "game")
+
+    // права игрока: владелец имеет все, админ только выданные
+    fun permsFrom(mods: Any?, owner: String, uid: String): Set<String> {
+        if (uid.isEmpty()) return emptySet()
+        if (owner == uid) return ALL
+        val m = (mods as? Map<*, *>)?.get(uid) as? Map<*, *> ?: return emptySet()
+        val l = m["perms"] as? List<*> ?: return emptySet()
+        return l.map { it.toString() }.toSet()
+    }
+
+    fun b64(bmp: Bitmap): String {
+        val small = Bitmap.createScaledBitmap(bmp, 64, 64, true)
+        val out = java.io.ByteArrayOutputStream()
+        small.compress(Bitmap.CompressFormat.PNG, 100, out)
+        return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+    }
+
+    fun fromB64(s: String?): Bitmap? {
+        if (s == null || s.isEmpty()) return null
+        return try {
+            val bytes = Base64.decode(s, Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
     fun untilText(t: Long): String =
         java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(t))
 
@@ -68,8 +96,9 @@ object GroupCmd {
         ref.get().addOnSuccessListener { g ->
             val owner = g.getString("owner") ?: ""
             val mods = (g.get("mods") as? Map<*, *>)?.keys?.map { it.toString() }?.toSet() ?: emptySet()
-            if (me != owner && !mods.contains(me)) {
-                toast("У тебя нет прав в этой группе")
+            val need = if (cmd == "/mute" || cmd == "/unmute") "mute" else "ban"
+            if (!permsFrom(g.get("mods"), owner, me).contains(need)) {
+                toast("У тебя нет такого права в этой группе")
                 return@addOnSuccessListener
             }
             ref.collection("members").get().addOnSuccessListener { ms ->
