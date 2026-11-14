@@ -152,7 +152,8 @@ class MainActivity : Activity() {
             setContentView(scroll)
             updateStatus()
             loadMe()
-                        checkFirebase()
+            checkFirebase()
+            handleAuto(intent)
         } catch (e: Throwable) {
             val t = TextView(this)
             t.text = "ОШИБКА ПРИ СТАРТЕ:\n" + android.util.Log.getStackTraceString(e).take(1500)
@@ -160,6 +161,19 @@ class MainActivity : Activity() {
             t.setPadding(32, 96, 32, 32)
             setContentView(t)
         }
+    }
+
+    private fun handleAuto(i: Intent?) {
+        if (i != null && i.getBooleanExtra("autostart", false)) {
+            i.removeExtra("autostart")
+            startFlow("START")
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleAuto(intent)
     }
 
     override fun onResume() {
