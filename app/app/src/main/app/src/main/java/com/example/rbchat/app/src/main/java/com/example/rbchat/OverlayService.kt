@@ -82,7 +82,7 @@ class OverlayService : Service() {
     private val ROBLOX = "com.roblox.client"
     private val VERSION = "v13"
     private var lastDiag = ""
-    private class Msg(val id: String, val rid: Long, val uid: String, val name: String, val text: String)
+    private class Msg(val id: String, val rid: Long, val uid: String, val name: String, val text: String, val game: String)
 
     private var msgs: List<Msg> = emptyList()
     private var reg: ListenerRegistration? = null
@@ -97,7 +97,9 @@ class OverlayService : Service() {
     private var gid = ""
     private var grpReg: ListenerRegistration? = null
     private var grpOwner = ""
-    private var grpMods: Set<String> = emptySet()
+    private var myPerms: Set<String> = emptySet()
+    private var grpPins: List<String> = emptyList()
+    private var grpGame = ""
     private var grpBanned: Set<String> = emptySet()
     private var grpMuted: Map<String, Long> = emptyMap()
     private var grpWords: List<String> = emptyList()
@@ -530,6 +532,10 @@ class OverlayService : Service() {
             if (uid.isNotEmpty() && grpBanned.contains(uid)) t += "\nТебя забанили в этой группе."
         }
         addMsg(t)
+        if (gid.isNotEmpty()) {
+            if (grpGame.isNotEmpty()) addMsg("🎮 Игра группы: " + grpGame)
+            for (p in grpPins) addMsg(p)
+        }
     }
 
     private fun checkRoom() {
@@ -556,7 +562,7 @@ class OverlayService : Service() {
 
     private fun canModerate(): Boolean {
         val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return false
-        return gid.isNotEmpty() && (uid == grpOwner || grpMods.contains(uid))
+        return gid.isNotEmpty() && uid.isNotEmpty() && myPerms.isNotEmpty()
     }
 
     private fun groupUpdate(field: String, value: Any, okText: String) {
@@ -658,12 +664,19 @@ class OverlayService : Service() {
         t.setTextColor(Color.WHITE)
         t.textSize = 13f
         col.addView(n)
+        if (m.game.isNotEmpty()) {
+            val gt = TextView(this)
+            gt.text = "🎮 " + m.game
+            gt.setTextColor(Color.parseColor("#B0B0B0"))
+            gt.textSize = 10f
+            col.addView(gt)
+        }
         col.addView(t)
-        if (canModerate() && m.uid.isNotEmpty() && m.uid != curUid && m.uid != grpOwner) {
+        if (canModerate() && (myPerms.contains("mute") || myPerms.contains("ban")) && m.uid.isNotEmpty() && m.uid != curUid && m.uid != grpOwner) {
             val acts = LinearLayout(this)
             acts.orientation = LinearLayout.HORIZONTAL
             acts.visibility = View.GONE
-            acts.addView(actionButton("Мут 10м") {
+            if (myPerms.contains("mute")) acts.addView(actionButton("Мут 10м") {
                 val v = hashMapOf<String, Any>(
                     "until" to (System.currentTimeMillis() + 10L * 60000L),
                     "name" to m.name,
@@ -671,7 +684,7 @@ class OverlayService : Service() {
                 )
                 groupUpdate("muted." + m.uid, v, "Замучен на 10 минут")
             })
-            acts.addView(actionButton("Мут 1ч") {
+            if (myPerms.contains("mute")) acts.addView(actionButton("Мут 1ч") {
                 val v = hashMapOf<String, Any>(
                     "until" to (System.currentTimeMillis() + 60L * 60000L),
                     "name" to m.name,
@@ -679,15 +692,10 @@ class OverlayService : Service() {
                 )
                 groupUpdate("muted." + m.uid, v, "Замучен на 1 час")
             })
-            acts.addView(actionButton("Бан") {
+            if (myPerms.contains("ban")) acts.addView(actionButton("Бан") {
                 val v = hashMapOf<String, Any>("name" to m.name, "reason" to "")
                 groupUpdate("banned." + m.uid, v, "Забанен")
             })
-            if (curUid == grpOwner) {
-                acts.addView(actionButton("В модеры") {
-                    groupUpdate("mods." + m.uid, m.name, "Теперь модератор")
-                })
-            }
             col.addView(acts)
             t.setOnClickListener {
                 acts.visibility = if (acts.visibility == View.GONE) View.VISIBLE else View.GONE
@@ -796,7 +804,9 @@ class OverlayService : Service() {
         grpReg?.remove()
         grpReg = null
         grpOwner = ""
-        grpMods = emptySet()
+        myPerms = emptySet()
+        grpPins = emptyList()
+        grpGame = ""
         grpBanned = emptySet()
         grpMuted = emptyMap()
         grpWords = emptyList()
@@ -814,7 +824,18 @@ class OverlayService : Service() {
             grpReg = db.collection("groups").document(gid).addSnapshotListener { d, e ->
                 if (e != null || d == null) return@addSnapshotListener
                 grpOwner = d.getString("owner") ?: ""
-                grpMods = (d.get("mods") as? Map<*, *>)?.keys?.map { it.toString() }?.toSet() ?: emptySet()
+                myPerms = GroupCmd.permsFrom(d.get("mods"), grpOwner, FirebaseAuth.getInstance().currentUser?.uid ?: "")
+                val pl = ArrayList<String>()
+                val praw = d.get("pins") as? List<*>
+                if (praw != null) {
+                    for (x in praw) {
+                        val pm = x as? Map<*, *>
+                        if (pm != null) pl.add("📌 " + (pm["name"] ?: "?") + ": " + (pm["text"] ?: ""))
+                    }
+                }
+                grpPins = pl
+                val pg = d.get("pinGame") as? Map<*, *>
+                grpGame = if (pg != null) (pg["name"] ?: "").toString() else ""
                 grpBanned = (d.get("banned") as? Map<*, *>)?.keys?.map { it.toString() }?.toSet() ?: emptySet()
                 grpBannedReason = GroupCmd.info(d.get("banned"), "reason")
                 grpMutedReason = GroupCmd.info(d.get("muted"), "reason")
@@ -853,7 +874,7 @@ class OverlayService : Service() {
                 }
                 val list = ArrayList<Msg>()
                 for (d in snap.documents) {
-                    list.add(Msg(d.id, d.getLong("rid") ?: 0L, d.getString("uid") ?: "", d.getString("name") ?: "?", d.getString("text") ?: ""))
+                    list.add(Msg(d.id, d.getLong("rid") ?: 0L, d.getString("uid") ?: "", d.getString("name") ?: "?", d.getString("text") ?: "", d.getString("game") ?: ""))
                 }
                 list.reverse()
                 if (!seeded) {
@@ -904,6 +925,8 @@ class OverlayService : Service() {
                         "text" to text,
                         "ts" to FieldValue.serverTimestamp()
                     )
+                    val gname = getSharedPreferences("game", MODE_PRIVATE).getString("name", "") ?: ""
+                    if (gname.isNotEmpty()) data["game"] = gname.take(40)
                     val db = FirebaseFirestore.getInstance()
                     val col = if (gid.isEmpty()) {
                         db.collection("messages")
